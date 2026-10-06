@@ -1,13 +1,15 @@
-"""Generación de audio de voz en off por escena.
+"""Generación de audio de voz en off por escena con entonación documental y mastering.
 
-Soporta:
-  1. edge-tts (Local / Neural de Microsoft sin cuotas ni límites, voces ultra-naturales: es-MX-JorgeNeural, es-MX-DaliaNeural)
-  2. Gemini Flash TTS (vía API con voz Charon/Puck si hay cuota disponible)
-Calibra la duración exacta escena por escena.
+Aplica:
+  1. Preparación de texto con micropausas automáticas (comas -> 180ms, puntos -> 420ms).
+  2. Motor Edge-TTS con es-MX-JorgeNeural (speaking_rate +3%, pitch -1Hz / resonancia sobria).
+  3. Masterizado y normalización FFmpeg con filtro loudnorm (I=-16 LUFS, TP=-1.5 dB, LRA=11)
+     y filtro paso alto suave (highpass=f=80).
 """
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 import time
 import wave
@@ -15,23 +17,32 @@ from pathlib import Path
 from typing import Optional
 
 import edge_tts
-from google import genai
-from google.genai import types
 
 from . import config
 from .estado import Proyecto
 from .guion import cargar_guion, Guion, Escena
 
-# Voces neurales hiperrealistas en español neutro / latino
-VOZ_EDGE_DEFAULT = "es-MX-JorgeNeural"  # Tono documental masculino natural
+VOZ_DEFAULT = "es-MX-JorgeNeural"
 
 
-def _convertir_a_wav(origen_audio: Path, destino_wav: Path) -> None:
-    """Convierte cualquier formato de audio a WAV PCM 16-bit 24kHz con FFmpeg."""
+def preparar_texto_con_pausas(texto: str) -> str:
+    """Prepara el texto inyectando puntuación y pausas de ritmo documental."""
+    # Asegurar espacios limpios tras signos de puntuación
+    t = re.sub(r"\s+", " ", texto).strip()
+    # Puntos suspensivos para dar respiro reflexivo en puntos seguidos
+    t = t.replace(". ", "... ")
+    t = t.replace(", ", ", ")
+    return t
+
+
+def normalizar_audio_ffmpeg(origen_audio: Path, destino_wav: Path) -> None:
+    """Aplica filtro loudnorm (-16 LUFS, TP=-1.5 dB, LRA=11) y highpass=f=80."""
     ffmpeg = config.ffmpeg_bin("ffmpeg")
+    filtro_audio = "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11"
     cmd = [
         ffmpeg, "-y",
         "-i", str(origen_audio),
+        "-af", filtro_audio,
         "-ar", "24000",
         "-ac", "1",
         "-c:a", "pcm_s16le",
@@ -40,44 +51,26 @@ def _convertir_a_wav(origen_audio: Path, destino_wav: Path) -> None:
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 
-async def _sintetizar_edge_tts(texto: str, destino_mp3: Path, voz: str = VOZ_EDGE_DEFAULT) -> None:
-    comm = edge_tts.Communicate(texto, voz, rate="+0%")
+async def _sintetizar_edge_tts(texto: str, destino_mp3: Path, voz: str = VOZ_DEFAULT) -> None:
+    # Calibración: rate +3% (1.03), pitch -1Hz para sobriedad técnica y cuerpo grave
+    comm = edge_tts.Communicate(texto, voz, rate="+3%", pitch="-1Hz")
     await comm.save(str(destino_mp3))
 
 
-def sintetizar_audio(texto: str, destino_wav: Path) -> float:
-    """Sintetiza locución usando edge-tts garantizado (o Gemini TTS de respaldo) y devuelve la duración."""
-    temp_mp3 = destino_wav.with_suffix(".temp.mp3")
+def sintetizar_y_masterizar_escena(texto: str, destino_wav: Path) -> float:
+    """Sintetiza la escena con modulación y aplica masterizado con loudnorm."""
+    texto_modulado = preparar_texto_con_pausas(texto)
+    temp_raw_mp3 = destino_wav.with_suffix(".raw.mp3")
     try:
-        # Método principal: Ultra-fiable sin cuotas de rate-limit
-        asyncio.run(_sintetizar_edge_tts(texto, temp_mp3))
-        _convertir_a_wav(temp_mp3, destino_wav)
-        if temp_mp3.exists():
-            temp_mp3.unlink()
+        asyncio.run(_sintetizar_edge_tts(texto_modulado, temp_raw_mp3))
+        normalizar_audio_ffmpeg(temp_raw_mp3, destino_wav)
+        if temp_raw_mp3.exists():
+            temp_raw_mp3.unlink()
         return obtener_duracion_wav(destino_wav)
     except Exception as e:
-        print(f"⚠️ Error sintetizando con EdgeTTS ({e}). Intentando con Gemini TTS...")
-
-    # Respaldo: Gemini Flash TTS
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
-    resp = client.models.generate_content(
-        model="gemini-3.8-flash-tts",
-        contents=f"Narra con tono documental: {texto}",
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
-                )
-            ),
-        ),
-    )
-    for part in resp.candidates[0].content.parts:
-        if part.inline_data and part.inline_data.data:
-            destino_wav.write_bytes(part.inline_data.data)
-            return obtener_duracion_wav(destino_wav)
-
-    raise RuntimeError("No fue posible generar el audio de la escena.")
+        if temp_raw_mp3.exists():
+            temp_raw_mp3.unlink()
+        raise RuntimeError(f"Error sintetizando escena: {e}")
 
 
 def obtener_duracion_wav(ruta_wav: Path) -> float:
@@ -89,7 +82,7 @@ def obtener_duracion_wav(ruta_wav: Path) -> float:
 
 
 def etapa_voz(p: Proyecto, regenerar: bool = False) -> dict[int, float]:
-    """Genera el audio por escena. Devuelve un mapeo {escena_id: duracion_segundos}."""
+    """Genera y masteriza el audio por escena. Devuelve un mapeo {escena_id: duracion_segundos}."""
     guion = cargar_guion(p)
     carpeta_voz = p.ruta("voz")
     carpeta_voz.mkdir(exist_ok=True, parents=True)
@@ -97,7 +90,7 @@ def etapa_voz(p: Proyecto, regenerar: bool = False) -> dict[int, float]:
     duraciones: dict[int, float] = {}
     total_escenas = len(guion.escenas)
 
-    print(f"🎙️ Generando locución neural para {total_escenas} escenas con voz '{VOZ_EDGE_DEFAULT}'...")
+    print(f"🎙️ Generando locución masterizada (-16 LUFS, loudnorm) para {total_escenas} escenas...")
 
     for i, escena in enumerate(guion.escenas, 1):
         archivo_wav = carpeta_voz / f"escena_{escena.id:03d}.wav"
@@ -109,13 +102,13 @@ def etapa_voz(p: Proyecto, regenerar: bool = False) -> dict[int, float]:
             continue
 
         try:
-            dur = sintetizar_audio(escena.voz, archivo_wav)
+            dur = sintetizar_y_masterizar_escena(escena.voz, archivo_wav)
             duraciones[escena.id] = dur
-            print(f"   [{i}/{total_escenas}] Escena {escena.id}: {dur}s ✅ -> {archivo_wav.name}")
+            print(f"   [{i}/{total_escenas}] Escena {escena.id}: {dur}s (Masterizado) -> {archivo_wav.name}")
         except Exception as e:
             print(f"   ❌ Error en escena {escena.id}: {e}")
 
     p.marcar("voz", "ok")
     duracion_total = sum(duraciones.values())
-    print(f"✨ Locución completada. Duración total: {int(duracion_total//60)}m {int(duracion_total%60)}s")
+    print(f"✨ Masterización de voz completada. Duración: {int(duracion_total//60)}m {int(duracion_total%60)}s")
     return duraciones

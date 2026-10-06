@@ -213,11 +213,59 @@ def etapa_guion(p: Proyecto) -> list[str]:
 
     p.ruta("guion", "guion.json").write_text(json.dumps(g.model_dump(), ensure_ascii=False, indent=2), "utf-8")
     p.ruta("guion", "guion_montaje.txt").write_text(_montaje_txt(p, g), "utf-8")
+    p.ruta("guion", "guion_doblaje.md").write_text(_guion_doblaje_md(p, g), "utf-8")
     p.ruta("guion", "fuentes.md").write_text(
         "# Fuentes\n\n" + "\n".join(f"- [{f['titulo']}]({f['url']})" for f in fuentes) + "\n", "utf-8"
     )
     p.marcar("guion", "revisar")
     return validar(g)
+
+
+def _guion_doblaje_md(p: Proyecto, g: Guion) -> str:
+    """Genera guía de locución profesional para doblaje humano / teleprompter."""
+    tonos_por_pose = {
+        "neutro": "Tono profesional, narración fluida y aplomada",
+        "explicando": "Tono didáctico, enfatizar conceptos técnicos",
+        "pensativo": "Tono reflexivo, ritmo pausado, sospecha",
+        "alerta": "Tono de urgencia, tensión y respiración marcada",
+        "eureka": "Tono entusiasta, revelación, volumen ascendente",
+        "senalando": "Tono asertivo, dirección clara hacia el dato",
+        "esceptico": "Tono interrogativo, ligera ironía o duda",
+        "riendo": "Tono ligero, empatía, sonrisa en la voz",
+    }
+    lineas = [
+        f"# 🎙️ Guion de Locución y Doblaje Profesional: {p.tema}",
+        f"> **Proyecto:** `{p.datos.get('slug')}` | **Duración objetivo:** {p.datos.get('minutos', 1.0)} min",
+        "> **Instrucción para el locutor:** Respete los tiempos de entrada indicados para mantener la sincronización con el montaje visual.",
+        "\n---\n"
+    ]
+    t = 0.0
+    for e in g.escenas:
+        palabras = e.voz.split()
+        conteo = len(palabras)
+        dur_est = min(conteo / config.PALABRAS_POR_SEG, config.MAX_SEG_ESCENA)
+        ini_str = f"{int(t//60):02d}:{int(t%60):02d}"
+        fin_str = f"{int((t+dur_est)//60):02d}:{int((t+dur_est)%60):02d}"
+        tono = tonos_por_pose.get(e.pose, "Tono documental neutro")
+        
+        # Resaltar en negrita la palabra clave o texto en pantalla
+        texto_destacado = e.voz
+        if e.texto_pantalla and e.texto_pantalla.lower() in e.voz.lower():
+            # resaltar si coincide
+            idx = e.voz.lower().find(e.texto_pantalla.lower())
+            if idx != -1:
+                pal_orig = e.voz[idx:idx+len(e.texto_pantalla)]
+                texto_destacado = e.voz[:idx] + f"**{pal_orig}**" + e.voz[idx+len(e.texto_pantalla):]
+
+        lineas.append(f"### Escena {e.id:02d} `[{ini_str} - {fin_str}]` *(~{dur_est:.1f}s | {conteo} palabras)*")
+        lineas.append(f"> **Dirección de voz:** [{tono}]")
+        if e.texto_pantalla:
+            lineas.append(f"> **Palabra en pantalla:** `{e.texto_pantalla}`")
+        lineas.append(f"\n> **LOCUCIÓN:**\n> \"{texto_destacado}\"\n")
+        lineas.append("---\n")
+        t += dur_est
+
+    return "\n".join(lineas)
 
 
 def cargar_guion(p: Proyecto) -> Guion:
