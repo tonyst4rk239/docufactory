@@ -24,8 +24,8 @@ if ffmpeg_bin_path:
         os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 
 
-def descargar_clip_youtube(query: str, destino_mp4: Path, inicio_s: int = 15, duracion_s: int = 5) -> bool:
-    """Busca en YouTube y descarga únicamente un fragmento de duración especificada."""
+def descargar_clip_youtube(query: str, destino_mp4: Path, inicio_s: int = 15, duracion_s: int = 14) -> bool:
+    """Busca en YouTube y descarga un fragmento de 12-14 segundos para cubrir toda la escena sin bucles."""
     ydl_opts = {
         "format": "bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]",
         "outtmpl": str(destino_mp4.with_suffix(".%(ext)s")),

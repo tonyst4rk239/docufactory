@@ -134,12 +134,13 @@ MATERIAL:
 
 def estructurar(material: str, minutos: float) -> Guion:
     palabras = int(minutos * 60 * config.PALABRAS_POR_SEG)
-    n_escenas = max(3, round(minutos * 60 / 9))
+    # Calibrar para que alcance exactamente la duración solicitada (cada escena dura ~9.5s)
+    n_escenas = max(5, round(minutos * 60 / 9.5))
     prompt = PROMPT_ESTRUCTURA.format(
         minutos=minutos, palabras=palabras, n_escenas=n_escenas,
         max_pal=config.MAX_PALABRAS_ESCENA, material=material,
     )
-    client = _cliente()
+    prompt += f"\n\nATENCIÓN OBLIGATORIA: El video debe durar {minutos} minutos exactos. Debes generar AL MENOS {n_escenas} escenas en total (aproximadamente {max(3, n_escenas // 5)} escenas detalladas por cada puesto del Top). NO RESUMAS en pocas escenas."
     for mod in [config.MODELO_ESTRUCTURA, "gemini-3.1-flash-lite"]:
         try:
             resp = client.models.generate_content(

@@ -22,7 +22,7 @@ from . import config
 from .estado import Proyecto
 from .guion import cargar_guion, Guion, Escena
 
-VOZ_DEFAULT = "es-MX-JorgeNeural"
+VOZ_DEFAULT = "es-US-AlonsoNeural"
 
 
 def preparar_texto_con_pausas(texto: str) -> str:
@@ -52,8 +52,8 @@ def normalizar_audio_ffmpeg(origen_audio: Path, destino_wav: Path) -> None:
 
 
 async def _sintetizar_edge_tts(texto: str, destino_mp3: Path, voz: str = VOZ_DEFAULT) -> None:
-    # Calibración: rate +3% (1.03), pitch -1Hz para sobriedad técnica y cuerpo grave
-    comm = edge_tts.Communicate(texto, voz, rate="+3%", pitch="-1Hz")
+    # Calibración: rate -3%, pitch -4Hz para misterio, presencia grave y suspenso cinematográfico
+    comm = edge_tts.Communicate(texto, voz, rate="-3%", pitch="-4Hz")
     await comm.save(str(destino_mp3))
 
 
