@@ -1,0 +1,10 @@
+google-genai>=1.20
+pydantic>=2.6
+python-dotenv>=1.0
+requests>=2.31
+pillow>=10.0
+numpy>=1.26
+# Etapas posteriores (se usan conforme avance el roadmap)
+faster-whisper>=1.0
+rembg[cpu]>=2.0.50
+pytrends>=4.9.2
