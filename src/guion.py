@@ -6,6 +6,7 @@ con response_schema (salida JSON estricta) en la misma petición.
 from __future__ import annotations
 
 import json
+import time
 from typing import Literal, Optional
 
 from google import genai
@@ -68,23 +69,48 @@ TEMA: {tema}
 
 def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
     palabras = int(minutos * 60 * config.PALABRAS_POR_SEG)
-    resp = _cliente().models.generate_content(
-        model=config.MODELO_GUION,
-        contents=PROMPT_INVESTIGACION.format(tema=tema, palabras=palabras),
-        config=types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.7,
-        ),
-    )
+    prompt = PROMPT_INVESTIGACION.format(tema=tema, palabras=palabras)
+    client = _cliente()
     fuentes: list[dict] = []
-    meta = resp.candidates[0].grounding_metadata if resp.candidates else None
-    if meta and meta.grounding_chunks:
-        vistos = set()
-        for ch in meta.grounding_chunks:
-            if ch.web and ch.web.uri not in vistos:
-                vistos.add(ch.web.uri)
-                fuentes.append({"titulo": ch.web.title or ch.web.uri, "url": ch.web.uri})
-    return resp.text or "", fuentes
+    
+    # Intento 1: Con Google Search grounding
+    try:
+        resp = client.models.generate_content(
+            model=config.MODELO_GUION,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.7,
+            ),
+        )
+        meta = resp.candidates[0].grounding_metadata if resp.candidates else None
+        if meta and meta.grounding_chunks:
+            vistos = set()
+            for ch in meta.grounding_chunks:
+                if ch.web and ch.web.uri not in vistos:
+                    vistos.add(ch.web.uri)
+                    fuentes.append({"titulo": ch.web.title or ch.web.uri, "url": ch.web.uri})
+        return resp.text or "", fuentes
+    except Exception as e:
+        print(f"⚠️ Aviso: Grounding con búsqueda no disponible ({e}). Generando con conocimiento interno del modelo...")
+
+    # Intento 2: Fallback sin búsqueda web con reintento / modelo alternativo
+    modelos_candidatos = [config.MODELO_GUION, "gemini-3.1-flash-lite"]
+    for mod in modelos_candidatos:
+        try:
+            resp = client.models.generate_content(
+                model=mod,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                ),
+            )
+            return resp.text or "", [{"titulo": "Conocimiento Curado Gemini AI", "url": "https://ai.google.dev"}]
+        except Exception as e:
+            print(f"⚠️ Reintentando investigación con modelo alternativo tras fallo en {mod}: {e}")
+            time.sleep(2)
+
+    raise RuntimeError("No fue posible generar el guion tras varios intentos.")
 
 
 # ------------------------------------------------------------------ paso B
@@ -114,22 +140,31 @@ MATERIAL:
 
 def estructurar(material: str, minutos: float) -> Guion:
     palabras = int(minutos * 60 * config.PALABRAS_POR_SEG)
-    n_escenas = round(minutos * 60 / 9)
-    resp = _cliente().models.generate_content(
-        model=config.MODELO_ESTRUCTURA,
-        contents=PROMPT_ESTRUCTURA.format(
-            minutos=minutos, palabras=palabras, n_escenas=n_escenas,
-            max_pal=config.MAX_PALABRAS_ESCENA, material=material,
-        ),
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=Guion,
-            temperature=0.4,
-        ),
+    n_escenas = max(3, round(minutos * 60 / 9))
+    prompt = PROMPT_ESTRUCTURA.format(
+        minutos=minutos, palabras=palabras, n_escenas=n_escenas,
+        max_pal=config.MAX_PALABRAS_ESCENA, material=material,
     )
-    if resp.parsed is not None:
-        return resp.parsed
-    return Guion.model_validate_json(resp.text)
+    client = _cliente()
+    for mod in [config.MODELO_ESTRUCTURA, "gemini-3.1-flash-lite"]:
+        try:
+            resp = client.models.generate_content(
+                model=mod,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=Guion,
+                    temperature=0.4,
+                ),
+            )
+            if resp.parsed is not None:
+                return resp.parsed
+            return Guion.model_validate_json(resp.text)
+        except Exception as e:
+            print(f"⚠️ Error estructurando con {mod} ({e}). Reintentando...")
+            time.sleep(2)
+
+    raise RuntimeError("No se pudo estructurar el guion.")
 
 
 # ------------------------------------------------------------------ salida
