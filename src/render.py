@@ -212,15 +212,13 @@ def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp
         filtros.append(f"{v_previo}[host]overlay={pos_x}:1080-h:shortest=1[v_con_host]")
         v_previo = "[v_con_host]"
 
-    # Gráfico de Texto Clave en Pantalla (si existe)
-    if esc.texto_pantalla:
-        # Texto centrado en el tercio inferior con caja de contraste estilo documental
-        texto_limpio = esc.texto_pantalla.replace(":", "").replace("'", "")
-        ruta_fuente = (config.FONTS_DIR / "bold.ttf").resolve().as_posix()
-        # En Windows FFmpeg requiere escapar los dos puntos de la unidad (ej C\:/...)
-        ruta_fuente_escapada = ruta_fuente.replace(":", "\\:")
+    # Tarjeta de Puesto del Top (#5 al #1) - Visible durante los primeros 3 segundos
+    if esc.texto_pantalla and esc.texto_pantalla.strip():
+        texto_limpio = esc.texto_pantalla.replace(":", "\\:").replace("'", "").strip()
+        ruta_fuente = (config.FONTS_DIR / "bold.ttf").resolve().as_posix().replace(":", "\\:")
+        # Banner superior/central moderno con animación de entrada y acento amarillo/blanco
         filtros.append(
-            f"{v_previo}drawtext=fontfile='{ruta_fuente_escapada}':text='{texto_limpio}':fontcolor=white:fontsize=52:box=1:boxcolor=black@0.70:boxborderw=20:x=(w-text_w)/2:y=h-190[v_salida]"
+            f"{v_previo}drawtext=fontfile='{ruta_fuente}':text='{texto_limpio}':fontcolor=0xFFE600:fontsize=64:box=1:boxcolor=black@0.85:boxborderw=24:x=(w-text_w)/2:y=120:enable='between(t,0,3.2)'[v_salida]"
         )
     else:
         filtros.append(f"{v_previo}null[v_salida]")

@@ -31,7 +31,7 @@ def etapa_publicacion(p: Proyecto, duraciones: dict[int, float]) -> None:
     creditos_txt = ""
     if ruta_creditos.exists():
         datos_cred = json.loads(ruta_creditos.read_text("utf-8"))
-        lineas_c = [f"- {c['credito']}" for c in datos_cred]
+        lineas_c = [f"- {c.get('credito', c.get('fuente', 'Clip de Archivo'))} (Escena {c.get('escena')})" for c in datos_cred]
         creditos_txt = "\n".join(set(lineas_c))
 
     # Generar títulos con Gemini

@@ -52,18 +52,18 @@ def _cliente() -> genai.Client:
 
 
 # ------------------------------------------------------------------ paso A
-PROMPT_INVESTIGACION = """Eres guionista e investigador de un canal de YouTube de documentales de divulgación
-llamado en el nicho "cómo funciona el mundo" (ciencia, tecnología, historia de inventos), en español latino neutro.
+PROMPT_INVESTIGACION = """Eres guionista y creador de contenido de YouTube especializado en rankings y TOPS DINÁMICOS
+(estilo 'Los 5 casos más impresionantes...', 'Top 5 tecnologías que cambiarán el mundo', etc.), en español latino neutro.
 
 TEMA: {tema}
 
-1. Investiga el tema con Google Search. Prioriza fuentes primarias, académicas, museos, agencias y medios serios.
-2. Escribe un DOSSIER con los hechos clave, fechas, cifras y personajes (cada dato debe ser verificable).
-3. Escribe un BORRADOR NARRATIVO completo de aproximadamente {palabras} palabras para voz en off, con esta estructura:
-   gancho (primeros 10 s, imposible de ignorar) → contexto → conflicto/problema → profundización → giro → resolución → CTA breve.
-   - Inserta un "mini-gancho" (pregunta, dato sorprendente o promesa) aproximadamente cada 150 palabras.
-   - Frases cortas, ritmo ágil, tono cercano pero riguroso. Nada de relleno ni frases genéricas.
-   - No inventes datos. Si algo es incierto o debatido, dilo explícitamente.
+1. Investiga y selecciona un TOP 5 (o Top 7) riguroso, fascinante y de alto impacto sobre este tema.
+2. Organiza los puestos en cuenta regresiva desde el puesto menos conocido/curioso (#5) hasta el número 1 indiscutible (#1).
+3. Escribe un BORRADOR NARRATIVO de aproximadamente {palabras} palabras con esta estructura:
+   - Gancho inicial breve (10 segundos): Plantea el misterio o la pregunta central del ranking.
+   - Puestos #5, #4, #3, #2 y #1: Cada puesto debe explicar claramente de qué se trata, por qué merece su posición y un dato sorprendente.
+   - Conclusión / Pregunta al espectador (10 segundos) para generar comentarios.
+   - Frases ágiles, sin relleno, vocabulario directo y entretenido.
 """
 
 
@@ -72,7 +72,7 @@ def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
     prompt = PROMPT_INVESTIGACION.format(tema=tema, palabras=palabras)
     client = _cliente()
     fuentes: list[dict] = []
-    
+
     # Intento 1: Con Google Search grounding
     try:
         resp = client.models.generate_content(
@@ -92,46 +92,40 @@ def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
                     fuentes.append({"titulo": ch.web.title or ch.web.uri, "url": ch.web.uri})
         return resp.text or "", fuentes
     except Exception as e:
-        print(f"⚠️ Aviso: Grounding con búsqueda no disponible ({e}). Generando con conocimiento interno del modelo...")
+        print(f"⚠️ Aviso: Grounding no disponible ({e}). Generando con conocimiento interno...")
 
-    # Intento 2: Fallback sin búsqueda web con reintento / modelo alternativo
+    # Intento 2: Fallback con modelos disponibles
     modelos_candidatos = [config.MODELO_GUION, "gemini-3.1-flash-lite"]
     for mod in modelos_candidatos:
         try:
             resp = client.models.generate_content(
                 model=mod,
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.7,
-                ),
+                config=types.GenerateContentConfig(temperature=0.7),
             )
-            return resp.text or "", [{"titulo": "Conocimiento Curado Gemini AI", "url": "https://ai.google.dev"}]
-        except Exception as e:
-            print(f"⚠️ Reintentando investigación con modelo alternativo tras fallo en {mod}: {e}")
+            return resp.text or "", [{"titulo": "Investigación Curada Gemini AI", "url": "https://ai.google.dev"}]
+        except Exception:
             time.sleep(2)
 
     raise RuntimeError("No fue posible generar el guion tras varios intentos.")
 
 
 # ------------------------------------------------------------------ paso B
-PROMPT_ESTRUCTURA = """Convierte el siguiente dossier y borrador en un GUION DE MONTAJE estructurado por escenas.
+PROMPT_ESTRUCTURA = """Convierte la investigación en un GUION DE MONTAJE para un video formato TOP / RANKING.
 
-REGLAS ESTRICTAS:
-- Duración objetivo: {minutos} minutos ≈ {palabras} palabras en total, repartidas en ~{n_escenas} escenas.
-- Cada escena dura como máximo 10 segundos: el campo "voz" tiene ENTRE 12 y {max_pal} palabras. Nunca más de {max_pal}.
-- Conserva los datos del borrador; no inventes nada nuevo.
-- Pose del Host según la emoción: problema/duda → pensativo o esceptico; riesgo/peligro → alerta;
-  solución/descubrimiento → eureka; explicación → explicando; mostrar algo → senalando; humor → riendo; resto → neutro.
-- host_visible = true aprox. en 40% de las escenas (siempre en gancho, giros y CTA); el resto es B-roll a pantalla completa.
-  Alterna host_lado para dar variedad.
-- broll_query_en: términos visuales concretos y filmables en inglés (ej. "silicon wafer macro cleanroom"), nunca abstractos.
-- texto_pantalla: solo en escenas con un dato o palabra clave fuerte; si no, cadena vacía.
-- sfx: usa "whoosh"/"transicion" en cambios de acto, "impacto" en datos fuertes, "revelacion" en giros; "ninguno" en la mayoría.
-- music_mood: mantenlo estable dentro de cada acto.
-- capitulo: pon un título corto en la primera escena de cada acto (después del gancho), null en las demás.
-- short_id: marca 2 o 3 secuencias de escenas CONSECUTIVAS (30-50 s cada una, 4-6 escenas) que funcionen solas
-  como Short vertical, empezando con un gancho fuerte. Numéralas 1, 2, 3. El resto null.
-- ids consecutivos empezando en 1.
+REGLAS ESTRICTAS DE FORMATO TOP:
+- Cada escena dura MÁXIMO 10 segundos: el campo "voz" tiene ENTRE 12 y {max_pal} palabras.
+- Organiza los puestos en cuenta regresiva (#5, #4, #3, #2, #1).
+- En la PRIMERA escena de cada puesto, pon en "texto_pantalla" el cartel del puesto en mayúsculas (ej: "#5: NOMBRE DEL CASO").
+  En las demás escenas de ese mismo puesto, pon "texto_pantalla" en blanco ("").
+- NO agregues subtítulos de la narración en "texto_pantalla". Solo el título del puesto.
+- Pose del Host:
+  * Cuando se introduce un nuevo puesto (#5, #4...): 'senalando' o 'alerta' o 'eureka'.
+  * Durante las explicaciones técnicas: 'explicando' o 'pensativo'.
+  * En la intro/cierre: 'neutro' o 'riendo'.
+- host_visible: true al anunciar cada puesto (#X) y en la conclusión; pon host_visible = false cuando se deba ver el clip a pantalla completa.
+- broll_query_en: términos precisos en inglés para buscar clips reales en YouTube (ej: "deepfake video glitch demo", "quantum chip processor macro").
+- sfx: pon 'whoosh' o 'transicion' al entrar a un nuevo puesto (#X); pon 'ninguno' en el resto.
 
 MATERIAL:
 {material}
