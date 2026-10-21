@@ -4,10 +4,13 @@ Uso:
   python make_video.py doctor                                  # verifica entorno, claves y assets
   python make_video.py importar <guion.json> [--auto]          # importa guion externo (Pluma), valida y produce
   python make_video.py nuevo "tema" [--minutos 1.0]            # crea guion con Gemini (opcional) y guía de doblaje
-  python make_video.py continuar <slug>                        # corre voz, broll, stems y renders duales
+  python make_video.py preparar <slug>                         # sintetiza voz + descarga B-roll y genera revisión visual
+  python make_video.py revisar <slug> [opciones]               # aprueba, rechaza o reemplaza clips (Lente)
+  python make_video.py renderizar <slug> [--forzar]            # montaje y render final (exige aprobación)
+  python make_video.py continuar <slug>                        # corre voz, broll, stems y renders duales de corrido
   python make_video.py auto "tema" [--minutos 1.0]             # pipeline continuo sin pausas
   python make_video.py doblar <slug> --audio <wav>             # re-sincroniza con locución humana
-  python make_video.py estado <slug>                           # ver progreso del proyecto
+  python make_video.py estado <slug>                           # ver progreso del proyecto y resumen de revisión
 """
 from __future__ import annotations
 
@@ -214,6 +217,117 @@ def cmd_nuevo(args) -> int:
     return 0
 
 
+def cmd_preparar(args) -> int:
+    from src.guion import cargar_guion
+    from src.voz import etapa_voz
+    from src.broll import etapa_broll
+    from src.revision import generar_revision_broll, formatear_resumen_revision
+
+    p = Proyecto.cargar(args.slug)
+    if getattr(args, "sin_host", False):
+        p.datos["sin_host"] = True
+        p.guardar()
+    print(f"\n🎬 [PREPARAR] Iniciando voz y descarga de B-roll: '{p.tema}' ({p.datos['slug']})\n")
+
+    guion_actual = cargar_guion(p)
+    p.invalidar_cache_si_guion_cambio(guion_actual.escenas)
+
+    # 1. Voz IA Masterizada
+    duraciones = etapa_voz(p)
+
+    # 2. Descarga y curaduría de B-Roll
+    etapa_broll(p, duraciones)
+
+    # 3. Generar cuadros JPG de revisión y revision.json
+    generar_revision_broll(p, formato="16:9")
+
+    print("\n" + "=" * 65)
+    print("⏸️  PAUSA DE REVISIÓN DE B-ROLL (Para el Agente Lente)")
+    print("=" * 65)
+    print(formatear_resumen_revision(p))
+    print(
+        "\n💡 Próximos pasos de curaduría:\n"
+        f"   • Aprobar escenas:   python make_video.py revisar {p.datos['slug']} --aprobar 1,2,4\n"
+        f"   • Rechazar escenas:  python make_video.py revisar {p.datos['slug']} --rechazar 3:\"motivo\"\n"
+        f"   • Reemplazar clip:   python make_video.py revisar {p.datos['slug']} --reemplazar 3 --consulta \"nueva búsqueda en inglés\"\n"
+        f"   • Renderizar final:  python make_video.py renderizar {p.datos['slug']}\n"
+    )
+    return 0
+
+
+def cmd_revisar(args) -> int:
+    from src.revision import aplicar_revision_cli
+
+    p = Proyecto.cargar(args.slug)
+    ok, salida = aplicar_revision_cli(
+        p,
+        aprobar=getattr(args, "aprobar", None),
+        rechazar=getattr(args, "rechazar", None),
+        reemplazar_id=getattr(args, "reemplazar", None),
+        url=getattr(args, "url", None),
+        inicio_s=getattr(args, "inicio", 0.0),
+        consulta=getattr(args, "consulta", None),
+        desde_archivo=getattr(args, "desde_archivo", None),
+        formato="16:9",
+    )
+    print(salida)
+    return 0 if ok else 1
+
+
+def cmd_renderizar(args) -> int:
+    from src.voz import etapa_voz
+    from src.render import etapa_render
+    from src.subtitulos import generar_srt
+    from src.publicacion import etapa_publicacion
+    from src.revision import verificar_aprobacion
+
+    p = Proyecto.cargar(args.slug)
+    if getattr(args, "sin_host", False):
+        p.datos["sin_host"] = True
+        p.guardar()
+
+    # Verificar aprobación de revisión salvo con --forzar
+    aprobado, no_aprobadas = verificar_aprobacion(p, forzar=getattr(args, "forzar", False))
+    if not aprobado:
+        print("\n" + "=" * 65)
+        print("❌ RENDER DETENIDO: Hay escenas pendientes o rechazadas en la revisión de B-roll:")
+        print("=" * 65)
+        for na in no_aprobadas:
+            eid = na.get("escena")
+            est = na.get("estado", "pendiente")
+            mot = na.get("motivo_rechazo") or "sin revisar aún"
+            txt = (na.get("texto_narrado") or "")[:45]
+            print(f"  • Escena {eid:02d} [{est.upper()}]: {mot} (\"{txt}...\")")
+        print(
+            "\n💡 Opciones para resolver:\n"
+            f"   1. Aprobar escenas:   python make_video.py revisar {p.datos['slug']} --aprobar {','.join(str(x['escena']) for x in no_aprobadas)}\n"
+            f"   2. Reemplazar clip:   python make_video.py revisar {p.datos['slug']} --reemplazar <id> --consulta \"nueva búsqueda\"\n"
+            f"   3. Forzar el render:  python make_video.py renderizar {p.datos['slug']} --forzar\n"
+        )
+        return 1
+
+    print(f"\n🚀 Renderizando montaje final: '{p.tema}' ({p.datos['slug']})\n")
+    duraciones = etapa_voz(p)
+
+    # 1. Subtítulos
+    generar_srt(p, duraciones)
+
+    # 2. Render Dual (Stems + Video IA + Video Karaoke)
+    salidas = etapa_render(p, duraciones)
+
+    # 3. Publicación
+    etapa_publicacion(p, duraciones)
+
+    print("\n" + "=" * 65)
+    print("🏆 ¡PRODUCCIÓN DUAL COMPLETADA CON ÉXITO!")
+    print(f"🎙️ Stem Voz IA:          {salidas['voz_master']}")
+    print(f"🎧 Stem Mezcla MDE:       {salidas['mde_master']}")
+    print(f"📹 Video con Voz IA:      {salidas['video_con_voz']}")
+    print(f"🎤 Video Clean / Karaoke: {salidas['video_sin_voz']}")
+    print("=" * 65)
+    return 0
+
+
 def cmd_continuar(args) -> int:
     from src.guion import cargar_guion
     from src.voz import etapa_voz
@@ -221,12 +335,13 @@ def cmd_continuar(args) -> int:
     from src.render import etapa_render
     from src.subtitulos import generar_srt
     from src.publicacion import etapa_publicacion
+    from src.revision import generar_revision_broll
 
     p = Proyecto.cargar(args.slug)
     if getattr(args, "sin_host", False):
         p.datos["sin_host"] = True
         p.guardar()
-    print(f"\n🚀 Procesando proyecto: '{p.tema}' ({p.datos['slug']})\n")
+    print(f"\n🚀 Procesando proyecto de corrido: '{p.tema}' ({p.datos['slug']})\n")
 
     guion_actual = cargar_guion(p)
     p.invalidar_cache_si_guion_cambio(guion_actual.escenas)
@@ -237,13 +352,16 @@ def cmd_continuar(args) -> int:
     # 2. B-Roll
     etapa_broll(p, duraciones)
 
-    # 3. Subtítulos
+    # 3. Generar cuadros de revisión para registro
+    generar_revision_broll(p, formato="16:9")
+
+    # 4. Subtítulos
     generar_srt(p, duraciones)
 
-    # 4. Render Dual (Stems + Video IA + Video Karaoke)
+    # 5. Render Dual (Stems + Video IA + Video Karaoke)
     salidas = etapa_render(p, duraciones)
 
-    # 5. Publicación
+    # 6. Publicación
     etapa_publicacion(p, duraciones)
 
     print("\n" + "=" * 65)
@@ -301,11 +419,16 @@ def cmd_auto(args) -> int:
 
 
 def cmd_estado(args) -> int:
+    from src.revision import formatear_resumen_revision
+
     p = Proyecto.cargar(args.slug)
-    print(f"Tema: {p.tema}\nUbicación: {p.carpeta}")
+    print(f"Tema: {p.tema}\nUbicación: {p.carpeta}\n")
+    print("== Progreso por Etapas ==")
     for e, s in p.datos["etapas"].items():
         icono = {"ok": "✅", "revisar": "⏸️", "pendiente": "⬜", "error": "❌"}.get(s, "•")
         print(f"  {icono} {e:12s}: {s}")
+    print()
+    print(formatear_resumen_revision(p))
     return 0
 
 
@@ -330,6 +453,28 @@ def main() -> int:
     n.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
     n.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
     n.set_defaults(fn=cmd_nuevo)
+
+    prep = sub.add_parser("preparar", help="Genera voz y descarga B-roll, extrayendo cuadros para revisión del agente Lente")
+    prep.add_argument("slug", help="Slug del proyecto")
+    prep.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
+    prep.set_defaults(fn=cmd_preparar)
+
+    rev = sub.add_parser("revisar", help="Revisión y curaduría de B-roll: aprobar, rechazar o reemplazar clips")
+    rev.add_argument("slug", help="Slug del proyecto")
+    rev.add_argument("--aprobar", help="Lista de escenas a aprobar (ej. '1,2,4' o 'all')")
+    rev.add_argument("--rechazar", nargs="*", default=[], help="Escenas a rechazar con motivo (ej. 3:'demasiado oscuro')")
+    rev.add_argument("--reemplazar", type=int, default=None, help="Número de escena a reemplazar")
+    rev.add_argument("--url", default=None, help="URL de video para reemplazar (YouTube, TikTok o directa)")
+    rev.add_argument("--inicio", type=float, default=0.0, help="Segundo de inicio para el clip reemplazado")
+    rev.add_argument("--consulta", default=None, help="Nueva consulta de búsqueda en inglés para reemplazar")
+    rev.add_argument("--desde-archivo", nargs="?", const="", default=None, help="Sincroniza decisiones desde revision.json")
+    rev.set_defaults(fn=cmd_revisar)
+
+    rnd = sub.add_parser("renderizar", help="Montaje y render final del proyecto (requiere escenas aprobadas salvo --forzar)")
+    rnd.add_argument("slug", help="Slug del proyecto")
+    rnd.add_argument("--forzar", action="store_true", help="Fuerza el render ignorando escenas pendientes o rechazadas")
+    rnd.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
+    rnd.set_defaults(fn=cmd_renderizar)
 
     c = sub.add_parser("continuar")
     c.add_argument("slug")

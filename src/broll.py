@@ -1097,6 +1097,8 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
                     "fuente": "Cache+Chained" if extras_cache else "Cache",
                     "detalle": f"YAVG={met_cache.get('yavg')}, res={met_cache.get('width')}x{met_cache.get('height')}",
                     "duracion_video": t_vid,
+                    "url": "",
+                    "consultas_usadas": list(getattr(esc, "broll_queries_en", []) or []),
                 })
                 continue
             else:
@@ -1114,6 +1116,7 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
         dur_descarga = max(15, int(dur_audio) + 5)
         fuente_usada = "Fallback"
         detalle_clip = ""
+        url_usada = ""
         exito = False
 
         # 1. Priorizar fuentes con licencia segura (Pexels / Pixabay) cuando existe un match relevante de query
@@ -1138,6 +1141,7 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
                         f"   [{i}/{total}] ✅ Escena {esc.id}: Clip con licencia segura de {cand['fuente']} [{cand['key']}] "
                         f"(score {cand['score']}, YAVG={met_st.get('yavg')}, {cand['duracion']:.1f}s)"
                     )
+                    url_usada = cand["url"]
                     break
                 else:
                     destino_clip.unlink(missing_ok=True)
@@ -1164,6 +1168,8 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
                 exito = True
                 fuente_usada = "YouTube"
                 detalle_clip = clave_yt
+                m_yt_id = re.search(r"yt:([A-Za-z0-9_-]{11})", clave_yt)
+                url_usada = f"https://www.youtube.com/watch?v={m_yt_id.group(1)}" if m_yt_id else clave_yt
                 print(f"      ✅ Escena {esc.id}: Clip aprobado de YouTube ({clave_yt}).")
             else:
                 motivo_fb = "bloqueo anti-bot de YouTube" if not youtube_disponible() else "candidatos de YouTube rechazados por filtro"
@@ -1186,6 +1192,7 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
                         )
                         clips_usados.add(cand["key"])
                         clips_usados.add(cand["url"])
+                        url_usada = cand["url"]
                         print(f"      ✅ Escena {esc.id}: Clip de respaldo seguro {cand['fuente']} [{cand['key']}] (YAVG={met_st.get('yavg')})")
                         break
                     else:
@@ -1208,6 +1215,7 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
 
         if not exito:
             fuente_usada = "Fallback"
+            url_usada = "lavfi:color"
             print(f"      🛡️ Escena {esc.id}: Ningún clip aprobó los filtros -> generando fondo estilizado...")
             cmd_emergencia = [
                 ffmpeg_bin_path or "ffmpeg", "-y",
@@ -1231,6 +1239,8 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
             "credito": f"{fuente_usada}: {detalle_clip}",
             "detalle": detalle_clip,
             "duracion_video": t_vid,
+            "url": url_usada,
+            "consultas_usadas": list(getattr(esc, "broll_queries_en", []) or [query_yt]),
         })
 
     p.ruta("b_roll", "creditos.json").write_text(json.dumps(creditos, ensure_ascii=False, indent=2), "utf-8")

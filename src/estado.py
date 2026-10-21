@@ -10,8 +10,9 @@ from typing import Any
 
 from . import config
 
-ETAPAS = ["guion", "voz", "alineacion", "broll", "render", "shorts", "publicacion"]
+ETAPAS = ["guion", "voz", "alineacion", "broll", "revision", "render", "shorts", "publicacion"]
 SUBCARPETAS = ["guion", "voz", "b_roll", "render", "renders", "shorts", "publicacion"]
+
 
 
 def _calcular_firma_escenas(escenas: list[Any]) -> dict[str, Any]:
@@ -139,7 +140,7 @@ class Proyecto:
             if ruta_sub.exists():
                 shutil.rmtree(ruta_sub, ignore_errors=True)
             ruta_sub.mkdir(parents=True, exist_ok=True)
-        for etapa_reset in ("voz", "broll", "render", "publicacion"):
+        for etapa_reset in ("voz", "broll", "revision", "render", "publicacion"):
             if etapa_reset in self.datos.get("etapas", {}):
                 self.datos["etapas"][etapa_reset] = "pendiente"
         self.guardar()

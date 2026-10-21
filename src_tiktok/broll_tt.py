@@ -123,6 +123,7 @@ def etapa_broll_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, fl
         exito = False
         fuente_usada = "Fallback"
         detalle_clip = ""
+        url_usada = ""
 
         # 1. PRIORIDAD 1: Fuentes con licencia segura (Pixabay vertical o HD recortable)
         candidatos_pix = _buscar_candidatos_pixabay_vertical(queries, clips_usados)
@@ -140,6 +141,7 @@ def etapa_broll_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, fl
                     )
                     clips_usados.add(cand["key"])
                     clips_usados.add(cand["url"])
+                    url_usada = cand["url"]
                     print(f"      ✅ Clip 9:16 aprobado desde Pixabay [{cand['key']}] (YAVG={met_st.get('yavg')})")
                     break
                 else:
@@ -166,12 +168,16 @@ def etapa_broll_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, fl
                 exito = True
                 fuente_usada = "YouTube"
                 detalle_clip = clave_yt
+                import re as _re_tt
+                m_yt_id = _re_tt.search(r"yt:([A-Za-z0-9_-]{11})", clave_yt)
+                url_usada = f"https://www.youtube.com/watch?v={m_yt_id.group(1)}" if m_yt_id else clave_yt
                 print(f"      ✅ Clip 9:16 aprobado desde YouTube ({clave_yt})")
 
         # 3. PRIORIDAD 3: Fondo cinematográfico si ningún candidato aprobó
         if not exito:
             fuente_usada = "Fallback"
             detalle_clip = "fondo estilizado 9:16"
+            url_usada = "lavfi:color:9:16"
             print(f"      ⚠️ Generando fondo cinematográfico 9:16 para escena {esc.id}...")
             ffmpeg = config.ffmpeg_bin("ffmpeg") or "ffmpeg"
             cmd_emergencia = [
@@ -195,6 +201,8 @@ def etapa_broll_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, fl
             "credito": f"{fuente_usada}: {detalle_clip}",
             "detalle": detalle_clip,
             "duracion_video": t_vid,
+            "url": url_usada,
+            "consultas_usadas": queries,
         })
 
     p.ruta("b_roll", "creditos.json").write_text(json.dumps(creditos, ensure_ascii=False, indent=2), "utf-8")
