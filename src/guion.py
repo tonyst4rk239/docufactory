@@ -83,7 +83,7 @@ TEMA: {tema}
 
 
 def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
-    palabras = int(minutos * 60 * config.PALABRAS_POR_SEG)
+    palabras = int(round(minutos * config.PALABRAS_POR_MIN))
     prompt = PROMPT_INVESTIGACION.format(tema=tema, palabras=palabras)
     client = _cliente()
     fuentes: list[dict] = []
@@ -130,8 +130,9 @@ def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
 # ------------------------------------------------------------------ paso B
 PROMPT_ESTRUCTURA = """Convierte la investigación en un GUION DE MONTAJE para un video formato TOP / RANKING.
 
-REGLAS ESTRICTAS DE FORMATO TOP:
-- Cada escena dura MÁXIMO 10 segundos: el campo "voz" tiene ENTRE 12 y {max_pal} palabras.
+REGLAS ESTRICTAS DE FORMATO TOP Y DURACIÓN:
+- Presupuesto estricto de locución: el video dura {minutos} minuto(s), lo que equivale a **{palabras} palabras en total** (rango permitido: entre {palabras_min} y {palabras_max} palabras sumando el campo "voz" de TODAS las escenas, calculado a {ppm} palabras/minuto considerando las pausas de puntuación).
+- Genera aproximadamente {n_escenas} escenas en total. Cada escena dura entre 5 y 8 segundos: el campo "voz" debe tener ENTRE 12 y {max_pal} palabras. ¡NO excedas las {palabras_max} palabras totales!
 - Organiza los puestos en cuenta regresiva (#5, #4, #3, #2, #1).
 - En la PRIMERA escena de cada puesto, pon en "texto_pantalla" el cartel del puesto en mayúsculas (ej: "#5: NOMBRE DEL CASO").
   En las demás escenas de ese mismo puesto, pon "texto_pantalla" en blanco ("").
@@ -156,14 +157,26 @@ MATERIAL:
 
 
 def estructurar(material: str, minutos: float) -> Guion:
-    palabras = int(minutos * 60 * config.PALABRAS_POR_SEG)
-    # Calibrar para que alcance exactamente la duración solicitada (cada escena dura ~9.5s)
-    n_escenas = max(5, round(minutos * 60 / 9.5))
+    palabras = int(round(minutos * config.PALABRAS_POR_MIN))
+    palabras_min = int(round(minutos * 135))
+    palabras_max = int(round(minutos * 150))
+    # ~16 palabras por escena (~6.7s por escena incluyendo micropausas)
+    n_escenas = max(5, round(palabras / 16.0))
     prompt = PROMPT_ESTRUCTURA.format(
-        minutos=minutos, palabras=palabras, n_escenas=n_escenas,
-        max_pal=config.MAX_PALABRAS_ESCENA, material=material,
+        minutos=minutos,
+        palabras=palabras,
+        palabras_min=palabras_min,
+        palabras_max=palabras_max,
+        ppm=config.PALABRAS_POR_MIN,
+        n_escenas=n_escenas,
+        max_pal=config.MAX_PALABRAS_ESCENA,
+        material=material,
     )
-    prompt += f"\n\nATENCIÓN OBLIGATORIA: El video debe durar {minutos} minutos exactos. Debes generar AL MENOS {n_escenas} escenas en total (aproximadamente {max(3, n_escenas // 5)} escenas detalladas por cada puesto del Top). NO RESUMAS en pocas escenas."
+    prompt += (
+        f"\n\nATENCIÓN OBLIGATORIA DE DURACIÓN: El video completo debe durar {minutos} min ({int(minutos * 60)} s). "
+        f"Ajusta la cantidad de escenas (~{n_escenas} escenas) y la longitud de cada locución para que la SUMA TOTAL "
+        f"de palabras de todas las escenas quede estrictamente entre {palabras_min} y {palabras_max} palabras (objetivo: {palabras})."
+    )
     client = _cliente()
     # Lista de modelos de respaldo para evitar fallos por 503 (alta demanda)
     modelos_candidatos = [config.MODELO_ESTRUCTURA, "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.8-flash"]
@@ -220,12 +233,27 @@ def _montaje_txt(p: Proyecto, g: Guion) -> str:
     return "\n".join(lineas)
 
 
-def validar(g: Guion) -> list[str]:
+def validar(g: Guion, minutos: Optional[float] = None) -> list[str]:
     avisos = []
+    total_palabras = 0
     for e in g.escenas:
         n = len(e.voz.split())
+        total_palabras += n
         if n > config.MAX_PALABRAS_ESCENA:
-            avisos.append(f"Escena {e.id}: {n} palabras (máx {config.MAX_PALABRAS_ESCENA}); la etapa de voz la acortará.")
+            avisos.append(f"Escena {e.id}: {n} palabras (máx recomendado {config.MAX_PALABRAS_ESCENA}).")
+    if minutos is not None and minutos > 0:
+        min_pal = int(round(minutos * 135))
+        max_pal = int(round(minutos * 150))
+        est_s = total_palabras / config.PALABRAS_POR_SEG
+        print(
+            f"📏 Guion generado: {len(g.escenas)} escenas | {total_palabras} palabras totales "
+            f"(objetivo para {minutos} min: {min_pal}-{max_pal} pal, est. ~{int(est_s//60)}m {int(est_s%60):02d}s)"
+        )
+        if total_palabras < min_pal or total_palabras > max_pal:
+            avisos.append(
+                f"Conteo total de palabras ({total_palabras}) fuera del rango ideal ({min_pal}-{max_pal}) "
+                f"para {minutos} min (~{int(est_s)}s estimados)."
+            )
     shorts = {e.short_id for e in g.escenas if e.short_id}
     if len(shorts) < 2:
         avisos.append(f"Solo se marcaron {len(shorts)} Short(s).")
@@ -233,7 +261,7 @@ def validar(g: Guion) -> list[str]:
 
 
 def etapa_guion(p: Proyecto) -> list[str]:
-    minutos = p.datos["minutos"]
+    minutos = float(p.datos.get("minutos", 1.0))
     print(f"🔎 Investigando '{p.tema}' con {config.MODELO_GUION} + Google Search…")
     material, fuentes = investigar(p.tema, minutos)
     p.ruta("guion", "investigacion.md").write_text(material, "utf-8")
@@ -252,7 +280,7 @@ def etapa_guion(p: Proyecto) -> list[str]:
         "# Fuentes\n\n" + "\n".join(f"- [{f['titulo']}]({f['url']})" for f in fuentes) + "\n", "utf-8"
     )
     p.marcar("guion", "revisar")
-    return validar(g)
+    return validar(g, minutos=minutos)
 
 
 def _guion_doblaje_md(p: Proyecto, g: Guion) -> str:

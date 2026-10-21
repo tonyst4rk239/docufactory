@@ -50,11 +50,13 @@ MODELO_IMAGEN = os.getenv("MODELO_IMAGEN", "gemini-2.5-flash-image")
 TTS_IDIOMA = os.getenv("TTS_IDIOMA", "es-US")
 TTS_VOZ = os.getenv("TTS_VOZ", "es-US-Chirp3-HD-Charon")
 
-# --- Ritmo ---
-PALABRAS_POR_SEG = 2.5          # ~150 ppm, ritmo documental ágil
-MAX_SEG_ESCENA = 10.0           # retención en Smart TV
-MAX_PALABRAS_ESCENA = int(PALABRAS_POR_SEG * MAX_SEG_ESCENA)  # 25
+# --- Ritmo (140-150 palabras/min considerando micropausas y rate -3% de Edge-TTS) ---
+PALABRAS_POR_MIN = 142
+PALABRAS_POR_SEG = round(PALABRAS_POR_MIN / 60.0, 4)  # ~2.3667 pal/s
+MAX_SEG_ESCENA = 9.0            # retención en Smart TV
+MAX_PALABRAS_ESCENA = int(round(PALABRAS_POR_SEG * MAX_SEG_ESCENA))  # 21
 MINUTOS_DEFAULT = 8.5           # >= 8:00 habilita mid-rolls
+TOLERANCIA_DURACION = 0.12      # ±12% de margen al validar duración post-TTS
 
 # --- Vocabularios cerrados (el LLM solo puede elegir de aquí) ---
 POSES = ["neutro", "explicando", "pensativo", "alerta", "eureka", "senalando", "esceptico", "riendo"]

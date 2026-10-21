@@ -113,7 +113,40 @@ def etapa_voz(p: Proyecto, regenerar: bool = False) -> dict[int, float]:
         except Exception as e:
             print(f"   ❌ Error en escena {escena.id}: {e}")
 
+    duracion_total = round(sum(duraciones.values()), 2)
+    minutos_pedidos = float(p.datos.get("minutos", 1.0))
+    objetivo_s = round(minutos_pedidos * 60.0, 2)
+    desviacion_s = round(duracion_total - objetivo_s, 2)
+    desviacion_pct = round((desviacion_s / objetivo_s) * 100.0, 1) if objetivo_s > 0 else 0.0
+    total_palabras = sum(len(e.voz.split()) for e in guion.escenas)
+    wpm_efectivo = round(total_palabras / (duracion_total / 60.0), 1) if duracion_total > 0 else 0.0
+    margen_s = max(6.0, objetivo_s * config.TOLERANCIA_DURACION)
+    dentro_rango = abs(desviacion_s) <= margen_s
+
+    p.datos["validacion_duracion"] = {
+        "minutos_pedidos": minutos_pedidos,
+        "objetivo_s": objetivo_s,
+        "real_s": duracion_total,
+        "desviacion_s": desviacion_s,
+        "desviacion_pct": desviacion_pct,
+        "palabras_totales": total_palabras,
+        "wpm_efectivo": wpm_efectivo,
+        "dentro_de_rango": dentro_rango,
+    }
     p.marcar("voz", "ok")
-    duracion_total = sum(duraciones.values())
-    print(f"✨ Masterización de voz completada. Duración: {int(duracion_total//60)}m {int(duracion_total%60)}s")
+
+    signo = "+" if desviacion_s >= 0 else ""
+    print(
+        f"✨ Masterización de voz completada. Duración real: {int(duracion_total//60)}m {int(duracion_total%60):02d}s "
+        f"({duracion_total:.1f}s) | Objetivo: {int(objetivo_s//60)}m {int(objetivo_s%60):02d}s ({objetivo_s:.1f}s) "
+        f"| Ritmo real: {wpm_efectivo} pal/min ({total_palabras} palabras)"
+    )
+    if dentro_rango:
+        print(f"   ✅ Duración post-TTS dentro de tolerancia ({signo}{desviacion_s:.1f}s / {signo}{desviacion_pct}%).")
+    else:
+        print(
+            f"   ⚠️ Aviso de duración post-TTS: la locución difiere en {signo}{desviacion_s:.1f}s "
+            f"({signo}{desviacion_pct}%) respecto a los {minutos_pedidos} min solicitados "
+            f"(registrado en proyecto.json -> validacion_duracion)."
+        )
     return duraciones
