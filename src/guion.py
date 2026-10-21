@@ -15,8 +15,13 @@ from pydantic import BaseModel, Field
 
 from . import config
 from .estado import Proyecto
+from .host_anim import normalizar_pose
 
-Pose = Literal["neutro", "explicando", "pensativo", "alerta", "eureka", "senalando", "esceptico", "riendo"]
+Pose = Literal[
+    "explicando", "pensativo", "sorprendido", "esceptico", "dinero", "aprobando", "duda", "senalando",
+    # Alias retrocompatibles para guion.json existentes:
+    "neutro", "alerta", "eureka", "riendo",
+]
 Sfx = Literal["ninguno", "whoosh", "impacto", "tension", "revelacion", "glitch", "ambiente", "digital", "transicion"]
 Mood = Literal["misterio", "tension", "epica", "curiosidad", "calma"]
 Acto = Literal["gancho", "contexto", "conflicto", "profundizacion", "giro", "resolucion", "cta"]
@@ -137,10 +142,12 @@ REGLAS ESTRICTAS DE FORMATO TOP Y DURACIÓN:
 - En la PRIMERA escena de cada puesto, pon en "texto_pantalla" el cartel del puesto en mayúsculas (ej: "#5: NOMBRE DEL CASO").
   En las demás escenas de ese mismo puesto, pon "texto_pantalla" en blanco ("").
 - NO agregues subtítulos de la narración en "texto_pantalla". Solo el título del puesto.
-- Pose del Host:
-  * Cuando se introduce un nuevo puesto (#5, #4...): 'senalando' o 'alerta' o 'eureka'.
-  * Durante las explicaciones técnicas: 'explicando' o 'pensativo'.
-  * En la intro/cierre: 'neutro' o 'riendo'.
+- Pose del Host (campo `pose`, sugerida por escena según la emoción y el mood):
+  * Poses disponibles: `'explicando'` (manos abiertas conversando), `'pensativo'` (mano en la barbilla reflexionando), `'sorprendido'` (impacto/asombro), `'esceptico'` (brazos cruzados analítico), `'duda'` (encogiendo hombros ante una incógnita), `'senalando'` (apuntando al dato o puesto), `'aprobando'` (pulgares arriba, solo cierres positivos), `'dinero'` (billetes en mano).
+  * Cuando se introduce un nuevo puesto (#N): `'senalando'` o `'sorprendido'`.
+  * En misterios sin resolver, paradojas o preguntas abiertas: `'duda'`, `'pensativo'` o `'esceptico'`.
+  * En explicaciones o contexto documental: `'explicando'`.
+  * PROHIBICIÓN ESTRICTA: JAMÁS elijas `'dinero'` ni `'aprobando'` en videos o escenas de misterio, terror, crimen o tensión. `'dinero'` SOLO puede usarse si la escena habla explícitamente de finanzas, fortunas o negocios.
 - host_visible: true al anunciar cada puesto (#X) y en la conclusión; pon host_visible = false cuando se deba ver el clip a pantalla completa.
 - broll_query_en y broll_queries_en:
   * Genera en `broll_queries_en` ENTRE 2 y 3 consultas en inglés (3-5 palabras cada una) pensadas para bancos de video (Pexels/Pixabay) y archivo (YouTube).
@@ -156,7 +163,7 @@ MATERIAL:
 """
 
 
-def estructurar(material: str, minutos: float) -> Guion:
+def estructurar(material: str, minutos: float, tema: str = "") -> Guion:
     palabras = int(round(minutos * config.PALABRAS_POR_MIN))
     palabras_min = int(round(minutos * 135))
     palabras_max = int(round(minutos * 150))
@@ -198,6 +205,7 @@ def estructurar(material: str, minutos: float) -> Guion:
                         esc.broll_queries_en = [esc.broll_query_en]
                     elif esc.broll_queries_en and not esc.broll_query_en:
                         esc.broll_query_en = esc.broll_queries_en[0]
+                    esc.pose = normalizar_pose(esc.pose, mood=esc.music_mood, tema=tema, texto_voz=esc.voz)  # type: ignore[assignment]
                 return guion_obj
             except Exception as e:
                 print(f"⚠️ Reintento {intento+1}/3 con modelo {mod} tras aviso: {e}")
@@ -267,7 +275,7 @@ def etapa_guion(p: Proyecto) -> list[str]:
     p.ruta("guion", "investigacion.md").write_text(material, "utf-8")
 
     print(f"🧱 Estructurando en escenas con {config.MODELO_ESTRUCTURA}…")
-    g = estructurar(material, minutos)
+    g = estructurar(material, minutos, tema=p.tema)
 
     if p.datos.get("sin_host", False):
         for e in g.escenas:
@@ -286,14 +294,14 @@ def etapa_guion(p: Proyecto) -> list[str]:
 def _guion_doblaje_md(p: Proyecto, g: Guion) -> str:
     """Genera guía de locución profesional para doblaje humano / teleprompter."""
     tonos_por_pose = {
-        "neutro": "Tono profesional, narración fluida y aplomada",
-        "explicando": "Tono didáctico, enfatizar conceptos técnicos",
+        "explicando": "Tono didáctico, narración fluida y aplomada",
         "pensativo": "Tono reflexivo, ritmo pausado, sospecha",
-        "alerta": "Tono de urgencia, tensión y respiración marcada",
-        "eureka": "Tono entusiasta, revelación, volumen ascendente",
-        "senalando": "Tono asertivo, dirección clara hacia el dato",
-        "esceptico": "Tono interrogativo, ligera ironía o duda",
-        "riendo": "Tono ligero, empatía, sonrisa en la voz",
+        "sorprendido": "Tono de asombro, tensión y revelación impactante",
+        "esceptico": "Tono interrogativo, analítico o de duda razonable",
+        "duda": "Tono enigmático, planteando la incógnita al espectador",
+        "senalando": "Tono asertivo, dirección clara hacia el dato clave",
+        "aprobando": "Tono cercano, conclusión positiva",
+        "dinero": "Tono enfático sobre cifras, impacto económico o escala",
     }
     lineas = [
         f"# 🎙️ Guion de Locución y Doblaje Profesional: {p.tema}",

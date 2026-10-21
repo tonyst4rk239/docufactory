@@ -134,9 +134,9 @@ def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, f
             
         out_v = temp_dir / f"clip_v_{esc.id:03d}.mp4"
         
-        # Avatar del host
-        pose_nombre = esc.pose_host if esc.pose_host in config.POSES else "alerta"
-        host_png = config.HOST_DIR / f"{pose_nombre}_cerrada.png"
+        # Avatar del host validado por mood/tema
+        from src.host_anim import obtener_sprite
+        host_png = obtener_sprite(esc.pose_host, boca="cerrada", mood="misterio", tema=p.tema, texto_voz=esc.voz)
 
         render_clip_vertical(ffmpeg, broll_f, host_png, dur, out_v)
         clips_v.append(out_v)
@@ -154,7 +154,7 @@ def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, f
         ffmpeg, "-y",
         "-f", "concat", "-safe", "0",
         "-i", str(concat_txt),
-        "-vf", f"ass='{ruta_ass_esc}'",
+        "-vf", f"ass={ruta_ass_esc}",
         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
         "-an",
         str(video_mudo)

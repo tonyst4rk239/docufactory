@@ -19,7 +19,7 @@ class EscenaTikTok(BaseModel):
     voz: str = Field(description="Narración ultrarrápida (5 a 12 palabras)")
     broll_query_en: str = Field(description="Búsqueda para clips reales de redes sociales, noticias de archivo, entrevistas o metraje viral en YouTube/TikTok (ej: 'diddy court hearing footage news', 'diddy mansion fbi raid abc')")
     texto_destacado: str = Field(description="1 a 3 palabras clave en mayúsculas para subtítulo gigante")
-    pose_host: str = Field(default="alerta", description="alerta, senalando, pensativo, explicando, eureka, riendo")
+    pose_host: str = Field(default="sorprendido", description="sorprendido, senalando, pensativo, explicando, esceptico, duda, aprobando")
     sfx: str = Field(default="whoosh", description="whoosh, impacto, tension, revelacion, glitch, teclado, ninguno")
 
 

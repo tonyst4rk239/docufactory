@@ -59,7 +59,20 @@ MINUTOS_DEFAULT = 8.5           # >= 8:00 habilita mid-rolls
 TOLERANCIA_DURACION = 0.12      # ±12% de margen al validar duración post-TTS
 
 # --- Vocabularios cerrados (el LLM solo puede elegir de aquí) ---
-POSES = ["neutro", "explicando", "pensativo", "alerta", "eureka", "senalando", "esceptico", "riendo"]
+POSES = ["explicando", "pensativo", "sorprendido", "esceptico", "dinero", "aprobando", "duda", "senalando"]
+POSE_ALIASES = {
+    "neutro": "explicando",
+    "alerta": "sorprendido",
+    "eureka": "sorprendido",
+    "riendo": "aprobando",
+}
+POSES_POR_MOOD: dict[str, list[str]] = {
+    "misterio": ["explicando", "pensativo", "sorprendido", "esceptico", "duda", "senalando"],
+    "tension": ["sorprendido", "esceptico", "pensativo", "explicando", "duda", "senalando"],
+    "epica": ["explicando", "sorprendido", "senalando", "pensativo", "aprobando"],
+    "curiosidad": ["explicando", "pensativo", "sorprendido", "duda", "senalando", "esceptico", "aprobando"],
+    "calma": ["explicando", "pensativo", "aprobando", "senalando"],
+}
 SFX_CATEGORIAS = ["ninguno", "whoosh", "impacto", "tension", "revelacion", "glitch", "ambiente", "digital", "transicion"]
 MUSIC_MOODS = ["misterio", "tension", "epica", "curiosidad", "calma"]
 ACTOS = ["gancho", "contexto", "conflicto", "profundizacion", "giro", "resolucion", "cta"]

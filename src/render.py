@@ -226,9 +226,13 @@ def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp
     fondo_es_video = broll_mp4.exists() and es_video_valido(broll_mp4)
     fondo_archivo = broll_mp4 if fondo_es_video else (broll_jpg if broll_jpg.exists() else None)
 
-    # Host personalizado según la pose (salvo si se desactiva explícitamente)
+    # Host personalizado según la pose validada contra el mood y tema (salvo si se desactiva explícitamente)
     sin_host = p.datos.get("sin_host", False)
-    host_sprite = obtener_sprite(esc.pose, boca="cerrada") if (esc.host_visible and not sin_host) else None
+    host_sprite = (
+        obtener_sprite(esc.pose, boca="cerrada", mood=esc.music_mood, tema=p.tema, texto_voz=esc.voz)
+        if (esc.host_visible and not sin_host)
+        else None
+    )
 
     inputs = []
     filtros = []
