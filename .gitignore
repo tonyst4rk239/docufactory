@@ -20,3 +20,5 @@ test_*.mp3
 test_*.webm
 test_scene8.mp4
 test_ass.mp4
+*cookies*.txt
+cookies.txt

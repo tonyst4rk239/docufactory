@@ -60,7 +60,13 @@ def buscar_clip_pixabay(query: str) -> str | None:
 import re
 import urllib.parse
 import yt_dlp
-from src.broll import descargar_archivo_directo, es_video_valido
+from src.broll import (
+    descargar_archivo_directo,
+    es_video_valido,
+    opciones_ytdlp_base,
+    registrar_error_youtube,
+    youtube_disponible,
+)
 
 
 def buscar_youtube_ids(query: str, max_results: int = 4) -> list[str]:
@@ -78,16 +84,16 @@ def buscar_youtube_ids(query: str, max_results: int = 4) -> list[str]:
 
 def descargar_clip_social_yt(video_id: str, destino: Path, inicio_s: int = 5, duracion_s: int = 6) -> bool:
     """Descarga un fragmento exacto de video de YouTube/Shorts y lo remuxa a MP4."""
+    if not youtube_disponible():
+        return False
     url = f"https://www.youtube.com/watch?v={video_id}"
     temp_prefix = destino.parent / f"tmp_{destino.stem}"
     ydl_opts = {
+        **opciones_ytdlp_base(),
         "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "outtmpl": str(temp_prefix) + ".%(ext)s",
         "download_ranges": yt_dlp.utils.download_range_func(None, [(inicio_s, inicio_s + duracion_s)]),
         "force_keyframes_at_cuts": True,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -107,7 +113,8 @@ def descargar_clip_social_yt(video_id: str, destino: Path, inicio_s: int = 5, du
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         descargado.unlink(missing_ok=True)
         return destino.exists() and es_video_valido(destino)
-    except Exception:
+    except Exception as e:
+        registrar_error_youtube(e)
         for f in destino.parent.glob(f"{temp_prefix.name}.*"):
             try:
                 f.unlink(missing_ok=True)
@@ -135,26 +142,31 @@ def etapa_broll_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, fl
         exito = False
 
         # 1. PRIORIDAD 1: Búsqueda de clip real en YouTube / Shorts / Noticias
-        queries_yt = [
-            f"{query} #shorts",
-            f"{query} news footage",
-            query,
-        ]
-        
-        # Enriquecer con tema si la query es genérica
-        if len(query.split()) < 3 and p.tema:
-            queries_yt.insert(0, f"{p.tema} {query}")
+        if youtube_disponible():
+            queries_yt = [
+                f"{query} #shorts",
+                f"{query} news footage",
+                query,
+            ]
+            if len(query.split()) < 3 and p.tema:
+                queries_yt.insert(0, f"{p.tema} {query}")
 
-        for q_yt in queries_yt:
-            vids = buscar_youtube_ids(q_yt, max_results=3)
-            for vid_id in vids:
-                print(f"      ⬇️ Descargando metraje real desde YouTube ({vid_id})...")
-                exito = descargar_clip_social_yt(vid_id, destino, inicio_s=5, duracion_s=dur_pedida)
-                if exito:
-                    print(f"      ✅ Clip real de redes sociales obtenido ({destino.name})")
+            for q_yt in queries_yt:
+                if not youtube_disponible():
                     break
-            if exito:
-                break
+                vids = buscar_youtube_ids(q_yt, max_results=3)
+                for vid_id in vids:
+                    if not youtube_disponible():
+                        break
+                    print(f"      ⬇️ Descargando metraje real desde YouTube ({vid_id})...")
+                    exito = descargar_clip_social_yt(vid_id, destino, inicio_s=5, duracion_s=dur_pedida)
+                    if exito:
+                        print(f"      ✅ Clip real de redes sociales obtenido ({destino.name})")
+                        break
+                if exito:
+                    break
+        else:
+            print("      ↪️ YouTube omitido (bloqueado en esta sesión) -> pasando directo a Pixabay.")
 
         # 2. PRIORIDAD 2: Respaldo Pixabay si no hubo clips en YouTube
         if not exito:

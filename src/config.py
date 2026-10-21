@@ -26,6 +26,20 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 
+
+def _resolver_cookies() -> Path | None:
+    valor = os.getenv("YTDLP_COOKIES", "").strip().strip('"').strip("'")
+    if not valor:
+        return None
+    ruta = Path(valor).expanduser()
+    if not ruta.is_absolute():
+        ruta = RAIZ / ruta
+    return ruta
+
+
+# Ruta a cookies.txt para yt-dlp (None si no se configuró)
+YTDLP_COOKIES: Path | None = _resolver_cookies()
+
 # --- Modelos ---
 MODELO_GUION = os.getenv("MODELO_GUION", "gemini-2.5-pro")
 MODELO_ESTRUCTURA = os.getenv("MODELO_ESTRUCTURA", "gemini-2.5-pro")

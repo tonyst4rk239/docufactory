@@ -95,8 +95,58 @@ def buscar_youtube_ids(query: str, max_results: int = 4) -> list[str]:
         return []
 
 
+# ------------------------------------------------------------------ yt-dlp
+# Estado de YouTube durante la corrida actual (circuit breaker).
+_YT_ESTADO = {"bloqueado": False, "motivo": "", "aviso_cookies": False}
+_MARCAS_BLOQUEO = ("sign in to confirm", "not a bot", "http error 429", "too many requests")
+
+
+def youtube_disponible() -> bool:
+    return not _YT_ESTADO["bloqueado"]
+
+
+def opciones_ytdlp_base() -> dict:
+    """Opciones comunes de yt-dlp. Añade --cookies si YTDLP_COOKIES apunta a un archivo existente."""
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "nocheckcertificate": True,
+    }
+    ruta = config.YTDLP_COOKIES
+    if ruta is not None:
+        if ruta.is_file():
+            opts["cookiefile"] = str(ruta)
+            if not _YT_ESTADO["aviso_cookies"]:
+                print(f"   🍪 yt-dlp usando cookies de: {ruta}")
+                _YT_ESTADO["aviso_cookies"] = True
+        elif not _YT_ESTADO["aviso_cookies"]:
+            print(f"   ⚠️ YTDLP_COOKIES apunta a un archivo inexistente: {ruta} (se ignora)")
+            _YT_ESTADO["aviso_cookies"] = True
+    return opts
+
+
+def registrar_error_youtube(error: Exception) -> None:
+    """Si el error es un bloqueo anti-bot/rate-limit, apaga YouTube para el resto de la corrida."""
+    msg = str(error).lower()
+    if _YT_ESTADO["bloqueado"] or not any(m in msg for m in _MARCAS_BLOQUEO):
+        return
+    _YT_ESTADO["bloqueado"] = True
+    _YT_ESTADO["motivo"] = str(error).strip().splitlines()[0][:200]
+    sugerencia = (
+        "Las cookies configuradas no fueron aceptadas; exporta unas nuevas."
+        if "cookiefile" in opciones_ytdlp_base()
+        else "Define YTDLP_COOKIES con la ruta a un cookies.txt para habilitarlo."
+    )
+    print("   ⛔ YouTube bloqueó la descarga (verificación anti-bot). "
+          "Se desactiva YouTube por el resto de la corrida y se usará stock (Pexels/Pixabay).")
+    print(f"      Motivo: {_YT_ESTADO['motivo']}")
+    print(f"      {sugerencia}")
+
+
 def descargar_clip_youtube(query: str, destino_mp4: Path, inicio_s: int = 10, duracion_s: int = 15) -> bool:
     """Busca en YouTube mediante ID real y descarga un fragmento en alta resolución garantizando duración suficiente."""
+    if not youtube_disponible():
+        return False
     vids = buscar_youtube_ids(query, max_results=3)
     if not vids:
         # Intento secundario con términos más amplios
@@ -109,16 +159,16 @@ def descargar_clip_youtube(query: str, destino_mp4: Path, inicio_s: int = 10, du
 
     temp_prefix = destino_mp4.parent / f"tmp_yt_{destino_mp4.stem}"
     ydl_opts = {
+        **opciones_ytdlp_base(),
         "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "outtmpl": str(temp_prefix.with_suffix(".%(ext)s")),
         "download_ranges": yt_dlp.utils.download_range_func(None, [(inicio_s, inicio_s + duracion_s)]),
         "force_keyframes_at_cuts": True,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
     }
 
     for vid_id in vids:
+        if not youtube_disponible():
+            break
         url = f"https://www.youtube.com/watch?v={vid_id}"
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -137,7 +187,8 @@ def descargar_clip_youtube(query: str, destino_mp4: Path, inicio_s: int = 10, du
 
             if destino_mp4.exists() and es_video_valido(destino_mp4):
                 return True
-        except Exception:
+        except Exception as e:
+            registrar_error_youtube(e)
             for f in destino_mp4.parent.glob(f"{temp_prefix.name}.*"):
                 try:
                     f.unlink(missing_ok=True)
@@ -241,19 +292,34 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
 
         query_yt = esc.broll_query_en
         dur_descarga = max(15, int(dur_audio) + 5)
-        print(f"   [{i}/{total}] Descargando clip para Escena {esc.id}: '{esc.broll_query_en}' ({dur_descarga}s solicitados)...")
-        exito = descargar_clip_youtube(query_yt, destino_clip, inicio_s=5, duracion_s=dur_descarga)
+        fuente_usada = "Fallback"
+        exito = False
+
+        if youtube_disponible():
+            print(f"   [{i}/{total}] Descargando clip de YouTube para Escena {esc.id}: '{esc.broll_query_en}' ({dur_descarga}s solicitados)...")
+            exito = descargar_clip_youtube(query_yt, destino_clip, inicio_s=5, duracion_s=dur_descarga)
+            if exito:
+                fuente_usada = "YouTube"
+                print(f"      ✅ Escena {esc.id}: Clip obtenido desde YouTube.")
+            else:
+                motivo_fb = "bloqueo anti-bot de YouTube" if not youtube_disponible() else "sin resultados válidos en YouTube"
+                print(f"      ↪️ Escena {esc.id}: Fallback activado ({motivo_fb}) -> buscando en stock...")
+        else:
+            print(f"   [{i}/{total}] Escena {esc.id}: YouTube omitido (bloqueado en esta sesión) -> buscando directo en stock: '{esc.broll_query_en}'...")
 
         if not exito:
             # Respaldo Pixabay
-            print(f"   ⚠️ Intentando respaldo con Pixabay...")
             rec = _buscar_pixabay_video(esc.broll_query_en)
             if rec:
                 exito = descargar_archivo_directo(rec["url"], destino_clip)
+                if exito:
+                    fuente_usada = "Pixabay"
+                    print(f"      ✅ Escena {esc.id}: Clip descargado desde Pixabay (ID {rec.get('id')}).")
 
         if not exito:
             # Respaldo de emergencia estilizado
-            print(f"   🛡️ Generando fondo cinematográfico de emergencia para Escena {esc.id}...")
+            fuente_usada = "Fallback"
+            print(f"      🛡️ Escena {esc.id}: Sin coincidencias en stock -> generando fondo cinematográfico de emergencia...")
             cmd_emergencia = [
                 ffmpeg_bin_path or "ffmpeg", "-y",
                 "-f", "lavfi", "-i", "color=c=0x111625:s=1920x1080:r=30",
@@ -275,7 +341,7 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
         creditos.append({
             "escena": esc.id,
             "archivo": destino_clip.name if exito else None,
-            "fuente": "YouTube" if exito else ("Pixabay" if exito else "Fallback"),
+            "fuente": fuente_usada if exito else "Error",
             "duracion_video": t_vid
         })
 
