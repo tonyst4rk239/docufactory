@@ -21,14 +21,16 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 
 def cmd_doctor(_args) -> int:
+    from src.render import listar_archivos_audio, resolver_musica_mood, resolver_sfx_categoria
+
     ok = True
     print("== Herramientas del Sistema ==")
     for b in ("ffmpeg", "ffprobe"):
         ruta = config.ffmpeg_bin(b)
         print(f"  {'✅' if ruta else '❌'} {b}: {ruta or 'no encontrado'}")
         ok &= bool(ruta)
-        
-    print("\n== Claves y APIs (.env) ==")
+
+    print("\n== Claves, APIs y Cookies (.env) ==")
     for nombre, req in [
         ("GEMINI_API_KEY", True),
         ("PIXABAY_API_KEY", True),
@@ -38,14 +40,65 @@ def cmd_doctor(_args) -> int:
         marca = "✅" if val else ("❌" if req else "➖ (opcional / fallback activo)")
         print(f"  {marca} {nombre}")
         ok &= bool(val) or not req
-        
-    print("\n== Identidad de Marca ==")
-    poses = [p for p in config.POSES if (config.HOST_DIR / f"{p}_cerrada.png").exists()]
-    print(f"  Host Personalizado: {len(poses)}/{len(config.POSES)} poses activas ✅")
-    
-    n_sfx = sum(1 for _ in config.SFX_DIR.glob("*/*.*"))
-    print(f"  SFX Disponibles: {n_sfx} sonidos (click, teclado, transicion, etc.) ✅")
-    
+
+    if config.YTDLP_COOKIES:
+        if config.YTDLP_COOKIES.exists() and config.YTDLP_COOKIES.is_file():
+            print(f"  ✅ YTDLP_COOKIES: {config.YTDLP_COOKIES}")
+        else:
+            print(f"  ⚠️ YTDLP_COOKIES configurado pero el archivo no existe: {config.YTDLP_COOKIES}")
+    else:
+        print("  ➖ YTDLP_COOKIES (opcional: no configurado; yt-dlp usará modo sin cookies y fallback a Pexels/Pixabay)")
+
+    print("\n== Identidad de Marca (Host Sprites) ==")
+    poses_ok = []
+    poses_faltantes = []
+    for p_name in config.POSES:
+        tiene_cerrada = (config.HOST_DIR / f"{p_name}_cerrada.png").exists()
+        tiene_abierta = (config.HOST_DIR / f"{p_name}_abierta.png").exists()
+        if tiene_cerrada and tiene_abierta:
+            poses_ok.append(p_name)
+        else:
+            poses_faltantes.append(p_name)
+    print(f"  {'✅' if not poses_faltantes else '⚠️'} Host Personalizado: {len(poses_ok)}/{len(config.POSES)} poses activas ({', '.join(poses_ok)})")
+    if poses_faltantes:
+        print(f"     ⚠️ Poses incompletas: {', '.join(poses_faltantes)}")
+
+    print("\n== Música por Mood (assets/music/) ==")
+    al_menos_una_musica = False
+    for mood in config.MUSIC_MOODS:
+        carpeta_m = config.MUSIC_DIR / mood
+        archivos_m = listar_archivos_audio(carpeta_m)
+        if archivos_m:
+            al_menos_una_musica = True
+            print(f"  ✅ mood '{mood}': {len(archivos_m)} pista(s) ({archivos_m[0].name})")
+        else:
+            ruta_fb, mood_fb, _ = resolver_musica_mood(mood, silencioso=True)
+            estado_dir = "carpeta vacía" if carpeta_m.exists() else "carpeta no existe"
+            if ruta_fb:
+                al_menos_una_musica = True
+                print(f"  ⚠️ mood '{mood}': {estado_dir} -> usará fallback '{mood_fb}' ({ruta_fb.name})")
+            else:
+                print(f"  ❌ mood '{mood}': {estado_dir} y sin fallback disponible")
+    ok &= al_menos_una_musica
+
+    print("\n== Efectos de Sonido por Categoría (assets/sfx/) ==")
+    categorias_sfx = [c for c in config.SFX_CATEGORIAS if c != "ninguno"]
+    for extra in ("click", "teclado"):
+        if extra not in categorias_sfx:
+            categorias_sfx.append(extra)
+    for cat in categorias_sfx:
+        carpeta_s = config.SFX_DIR / cat
+        archivos_s = listar_archivos_audio(carpeta_s)
+        if archivos_s:
+            print(f"  ✅ sfx '{cat}': {len(archivos_s)} sonido(s)")
+        else:
+            ruta_fb, cat_fb, _ = resolver_sfx_categoria(cat, silencioso=True)
+            estado_dir = "carpeta vacía" if carpeta_s.exists() else "carpeta no existe"
+            if ruta_fb:
+                print(f"  ⚠️ sfx '{cat}': {estado_dir} -> usará fallback '{cat_fb}' ({ruta_fb.name})")
+            else:
+                print(f"  ❌ sfx '{cat}': {estado_dir} y sin fallback disponible")
+
     print("\nTodo listo para operar ✅" if ok else "\nFaltan elementos obligatorios ❌")
     return 0 if ok else 1
 

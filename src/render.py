@@ -35,35 +35,95 @@ def _ejecutar_cmd(cmd: list[str]) -> bool:
         return False
 
 
-def _obtener_sfx(cat: str) -> Optional[Path]:
-    """Obtiene un archivo de sonido para la categoría solicitada."""
+_AVISOS_ASSETS_EMITIDOS: set[str] = set()
+
+
+def listar_archivos_audio(carpeta: Path) -> list[Path]:
+    """Lista archivos de audio (.wav, .mp3, .ogg) válidos en una carpeta."""
+    if not carpeta.exists() or not carpeta.is_dir():
+        return []
+    archivos: list[Path] = []
+    for ext in ("*.wav", "*.mp3", "*.ogg"):
+        archivos.extend(sorted(carpeta.glob(ext)))
+    return [a for a in archivos if a.is_file() and a.stat().st_size > 0]
+
+
+def resolver_sfx_categoria(cat: str, silencioso: bool = False) -> tuple[Optional[Path], str, bool]:
+    """Resuelve la categoría de SFX o su fallback más cercano si está vacía.
+    Retorna (ruta_archivo, categoria_efectiva, uso_fallback)."""
     if not cat or cat == "ninguno":
-        return None
-    carpeta = config.SFX_DIR / cat
-    if carpeta.exists():
-        if cat == "teclado":
-            boosted = carpeta / "typing_corto_boosted.wav"
-            if boosted.exists():
-                return boosted
-            corto = carpeta / "typing_corto.wav"
-            if corto.exists():
-                return corto
-        archivos = list(carpeta.glob("*.wav")) + list(carpeta.glob("*.mp3")) + list(carpeta.glob("*.ogg"))
-        if archivos:
-            return archivos[0]
-    return None
+        return None, "ninguno", False
+
+    def _elegir_de_carpeta(c: str) -> Optional[Path]:
+        carpeta = config.SFX_DIR / c
+        if not carpeta.exists():
+            return None
+        if c == "teclado":
+            for pref in ("typing_corto_boosted.wav", "typing_corto.wav"):
+                p_pref = carpeta / pref
+                if p_pref.exists() and p_pref.stat().st_size > 0:
+                    return p_pref
+        archivos = listar_archivos_audio(carpeta)
+        return archivos[0] if archivos else None
+
+    directo = _elegir_de_carpeta(cat)
+    if directo is not None:
+        return directo, cat, False
+
+    candidatos_fb = config.SFX_FALLBACKS.get(cat, ["impacto", "whoosh", "transicion"])
+    for fb in candidatos_fb:
+        elegido = _elegir_de_carpeta(fb)
+        if elegido is not None:
+            clave_aviso = f"sfx:{cat}->{fb}"
+            if not silencioso and clave_aviso not in _AVISOS_ASSETS_EMITIDOS:
+                _AVISOS_ASSETS_EMITIDOS.add(clave_aviso)
+                print(f"   ⚠️ SFX '{cat}' sin archivos en assets/sfx/{cat} -> usando fallback '{fb}' ({elegido.name})")
+            return elegido, fb, True
+
+    return None, cat, True
+
+
+def resolver_musica_mood(mood: str = "misterio", silencioso: bool = False) -> tuple[Optional[Path], str, bool]:
+    """Resuelve la pista de música de fondo para el mood o su fallback más cercano (ej. tension->misterio, epica->curiosidad).
+    Retorna (ruta_archivo, mood_efectivo, uso_fallback)."""
+    mood_limpio = mood if mood in config.MUSIC_MOODS else "misterio"
+    archivos_directos = listar_archivos_audio(config.MUSIC_DIR / mood_limpio)
+    if archivos_directos:
+        return archivos_directos[0], mood_limpio, False
+
+    candidatos_fb = config.MUSIC_FALLBACKS.get(mood_limpio, []) + [m for m in config.MUSIC_MOODS if m != mood_limpio]
+    vistos: set[str] = set()
+    for fb in candidatos_fb:
+        if fb in vistos:
+            continue
+        vistos.add(fb)
+        archivos_fb = listar_archivos_audio(config.MUSIC_DIR / fb)
+        if archivos_fb:
+            clave_aviso = f"music:{mood_limpio}->{fb}"
+            if not silencioso and clave_aviso not in _AVISOS_ASSETS_EMITIDOS:
+                _AVISOS_ASSETS_EMITIDOS.add(clave_aviso)
+                print(
+                    f"   ⚠️ Música mood '{mood_limpio}' sin archivos en assets/music/{mood_limpio} "
+                    f"-> usando fallback '{fb}' ({archivos_fb[0].name})"
+                )
+            return archivos_fb[0], fb, True
+
+    archivos_todos = list(config.MUSIC_DIR.glob("*/*.wav")) + list(config.MUSIC_DIR.glob("*/*.mp3")) + list(config.MUSIC_DIR.glob("*/*.ogg"))
+    if archivos_todos:
+        return archivos_todos[0], archivos_todos[0].parent.name, True
+    return None, mood_limpio, True
+
+
+def _obtener_sfx(cat: str) -> Optional[Path]:
+    """Obtiene un archivo de sonido para la categoría solicitada (con fallback automático si falta)."""
+    ruta, _, _ = resolver_sfx_categoria(cat, silencioso=False)
+    return ruta
 
 
 def _obtener_musica_fondo(mood: str = "misterio") -> Optional[Path]:
-    """Obtiene la pista de música de fondo documental correspondiente al mood."""
-    carpeta = config.MUSIC_DIR / (mood if mood in config.MUSIC_MOODS else "misterio")
-    if carpeta.exists():
-        archivos = list(carpeta.glob("*.wav")) + list(carpeta.glob("*.ogg")) + list(carpeta.glob("*.mp3"))
-        if archivos:
-            return archivos[0]
-    # Respaldo general
-    archivos_todos = list(config.MUSIC_DIR.glob("*/*.wav"))
-    return archivos_todos[0] if archivos_todos else None
+    """Obtiene la pista de música de fondo documental correspondiente al mood (con fallback automático si falta)."""
+    ruta, _, _ = resolver_musica_mood(mood, silencioso=False)
+    return ruta
 
 
 def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemplazo: Optional[Path] = None) -> tuple[Path, Path]:

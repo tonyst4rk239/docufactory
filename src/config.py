@@ -75,6 +75,25 @@ POSES_POR_MOOD: dict[str, list[str]] = {
 }
 SFX_CATEGORIAS = ["ninguno", "whoosh", "impacto", "tension", "revelacion", "glitch", "ambiente", "digital", "transicion"]
 MUSIC_MOODS = ["misterio", "tension", "epica", "curiosidad", "calma"]
+MUSIC_FALLBACKS: dict[str, list[str]] = {
+    "tension": ["misterio", "curiosidad", "calma"],
+    "epica": ["curiosidad", "misterio", "tension", "calma"],
+    "misterio": ["tension", "curiosidad", "calma"],
+    "curiosidad": ["misterio", "calma", "tension"],
+    "calma": ["curiosidad", "misterio"],
+}
+SFX_FALLBACKS: dict[str, list[str]] = {
+    "tension": ["impacto", "revelacion", "glitch"],
+    "ambiente": ["whoosh", "transicion"],
+    "digital": ["glitch", "teclado", "click"],
+    "whoosh": ["transicion", "impacto"],
+    "transicion": ["whoosh", "click"],
+    "impacto": ["revelacion", "whoosh"],
+    "revelacion": ["impacto", "glitch"],
+    "glitch": ["revelacion", "impacto"],
+    "teclado": ["click", "transicion"],
+    "click": ["teclado", "transicion"],
+}
 ACTOS = ["gancho", "contexto", "conflicto", "profundizacion", "giro", "resolucion", "cta"]
 
 
