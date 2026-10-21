@@ -91,6 +91,7 @@ def cmd_continuar(args) -> int:
     import json
     data = json.loads(p_guion.read_text(encoding="utf-8"))
     guion = GuionTikTok.model_validate(data)
+    p.invalidar_cache_si_guion_cambio(guion.escenas)
 
     print(f"\n🚀 Renderizando video vertical TikTok: '{p.tema}' ({p.datos['slug']})\n")
 

@@ -215,6 +215,7 @@ def cmd_nuevo(args) -> int:
 
 
 def cmd_continuar(args) -> int:
+    from src.guion import cargar_guion
     from src.voz import etapa_voz
     from src.broll import etapa_broll
     from src.render import etapa_render
@@ -226,6 +227,9 @@ def cmd_continuar(args) -> int:
         p.datos["sin_host"] = True
         p.guardar()
     print(f"\n🚀 Procesando proyecto: '{p.tema}' ({p.datos['slug']})\n")
+
+    guion_actual = cargar_guion(p)
+    p.invalidar_cache_si_guion_cambio(guion_actual.escenas)
 
     # 1. Voz IA Masterizada
     duraciones = etapa_voz(p)
