@@ -1,198 +1,206 @@
-"""Descargador de B-Roll vertical o adaptable a 1080x1920."""
+"""Descargador de B-Roll vertical (9:16) con prioridad de licencia segura, filtro anti-Content ID y análisis FFmpeg."""
 from __future__ import annotations
 
-import os
+import json
 import subprocess
 from pathlib import Path
 import requests
 import urllib3
+
 from src import config
-from src.broll import descargar_clip_youtube, descargar_archivo_directo, es_video_valido
+from src.broll import (
+    HTTP_HEADERS,
+    analizar_calidad_visual_clip,
+    descargar_archivo_directo,
+    descargar_clip_youtube,
+    es_video_valido,
+    generar_reporte_broll_md,
+    obtener_duracion_video,
+    youtube_disponible,
+)
 from src.estado import Proyecto
 from src_tiktok.guion_tt import GuionTikTok
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 
-def buscar_clip_pixabay(query: str) -> str | None:
-    """Busca video en Pixabay priorizando formato vertical y fallback general."""
+def _buscar_candidatos_pixabay_vertical(queries: list[str], clips_usados: set[str]) -> list[dict]:
+    """Busca candidatos en Pixabay priorizando orientación vertical y HD recortable."""
     if not config.PIXABAY_API_KEY:
-        return None
+        return []
     url = "https://pixabay.com/api/videos/"
-    palabras = [w for w in query.split() if len(w) > 3]
+    candidatos: list[dict] = []
+    vistos: set[str] = set()
 
-    intentos = [
-        (query, "vertical"),
-        (query, "all"),
-    ]
-    if len(palabras) >= 2:
-        intentos.append((" ".join(palabras[:2]), "vertical"))
-        intentos.append((" ".join(palabras[:2]), "all"))
-        intentos.append((" ".join(palabras[-2:]), "all"))
-    elif palabras:
-        intentos.append((palabras[0], "all"))
-
-    intentos.append(("dark cinematic", "all"))
-    intentos.append(("suspense", "all"))
+    intentos: list[tuple[str, str]] = []
+    for q in queries[:3]:
+        intentos.append((q, "vertical"))
+        intentos.append((q, "all"))
+    intentos.append(("dark cinematic night", "vertical"))
+    intentos.append(("dark mysterious shadow", "all"))
 
     for q_int, orient in intentos:
         params = {
             "key": config.PIXABAY_API_KEY,
             "q": q_int,
             "orientation": orient,
-            "per_page": 5
+            "per_page": 6,
         }
         try:
             r = requests.get(url, params=params, headers=HTTP_HEADERS, verify=False, timeout=10)
-            if r.ok:
-                hits = r.json().get("hits", [])
-                for h in hits:
-                    vids = h.get("videos", {})
-                    opt = vids.get("large") or vids.get("medium") or vids.get("small")
-                    if opt and opt.get("url"):
-                        return opt["url"]
+            if not r.ok:
+                continue
+            for h in r.json().get("hits", []):
+                vid_id = str(h.get("id", ""))
+                key = f"pixabay:{vid_id}"
+                if not vid_id or vid_id in vistos or key in clips_usados:
+                    continue
+                vids = h.get("videos", {})
+                opt = vids.get("large") or vids.get("medium") or vids.get("small")
+                if not opt or not opt.get("url"):
+                    continue
+                vistos.add(vid_id)
+                candidatos.append({
+                    "fuente": "Pixabay",
+                    "key": key,
+                    "url": opt["url"],
+                    "tags": str(h.get("tags") or ""),
+                    "duracion": float(h.get("duration") or 0.0),
+                    "orientacion": orient,
+                })
         except Exception:
             continue
-    return None
-
-
-import re
-import urllib.parse
-import yt_dlp
-from src.broll import (
-    descargar_archivo_directo,
-    es_video_valido,
-    opciones_ytdlp_base,
-    registrar_error_youtube,
-    youtube_disponible,
-)
-
-
-def buscar_youtube_ids(query: str, max_results: int = 4) -> list[str]:
-    """Busca videos reales en YouTube mediante scrape limpio sin bloqueos de bot."""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    q = urllib.parse.quote(query)
-    url = f"https://www.youtube.com/results?search_query={q}"
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        vids = re.findall(r"watch\?v=([a-zA-Z0-9_-]{11})", r.text)
-        return list(dict.fromkeys(vids))[:max_results]
-    except Exception:
-        return []
-
-
-def descargar_clip_social_yt(video_id: str, destino: Path, inicio_s: int = 5, duracion_s: int = 6) -> bool:
-    """Descarga un fragmento exacto de video de YouTube/Shorts y lo remuxa a MP4."""
-    if not youtube_disponible():
-        return False
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    temp_prefix = destino.parent / f"tmp_{destino.stem}"
-    ydl_opts = {
-        **opciones_ytdlp_base(),
-        "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "outtmpl": str(temp_prefix) + ".%(ext)s",
-        "download_ranges": yt_dlp.utils.download_range_func(None, [(inicio_s, inicio_s + duracion_s)]),
-        "force_keyframes_at_cuts": True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        candidatos = list(destino.parent.glob(f"{temp_prefix.name}.*"))
-        if not candidatos:
-            return False
-        descargado = candidatos[0]
-        ffmpeg = config.ffmpeg_bin("ffmpeg") or "ffmpeg"
-        cmd = [
-            ffmpeg, "-y",
-            "-i", str(descargado),
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            str(destino)
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        descargado.unlink(missing_ok=True)
-        return destino.exists() and es_video_valido(destino)
-    except Exception as e:
-        registrar_error_youtube(e)
-        for f in destino.parent.glob(f"{temp_prefix.name}.*"):
-            try:
-                f.unlink(missing_ok=True)
-            except Exception:
-                pass
-        return False
+    return candidatos
 
 
 def etapa_broll_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, float]):
     carpeta_broll = p.ruta("b_roll")
     carpeta_broll.mkdir(parents=True, exist_ok=True)
     total = len(guion.escenas)
-    print(f"🎬 Descargando clips REALES de redes sociales (YouTube / Shorts / TikTok) para {total} micro-escenas...")
+    creditos: list[dict] = []
+    rechazos_por_escena: dict[int, list[dict]] = {}
+    clips_usados: set[str] = set()
+
+    print(f"🎬 Curando B-roll vertical (9:16) para {total} micro-escenas (licencia segura + filtro FFmpeg YAVG/texto)...")
 
     for i, esc in enumerate(guion.escenas, 1):
         destino = carpeta_broll / f"escena_{esc.id:03d}.mp4"
-        if destino.exists() and es_video_valido(destino):
-            print(f"   [{i}/{total}] Clip existente y válido para Escena {esc.id}: {destino.name}")
-            continue
+        rechazos_esc: list[dict] = []
+        rechazos_por_escena[esc.id] = rechazos_esc
 
-        query = esc.broll_query_en.strip()
+        if destino.exists():
+            aprobado_c, motivo_c, met_c = analizar_calidad_visual_clip(destino, formato="9:16", min_yavg=25.0)
+            if aprobado_c:
+                t_vid = obtener_duracion_video(destino)
+                print(f"   [{i}/{total}] Clip en caché válido para Escena {esc.id}: {destino.name} (YAVG={met_c.get('yavg')})")
+                creditos.append({
+                    "escena": esc.id,
+                    "archivo": destino.name,
+                    "fuente": "Cache",
+                    "detalle": f"YAVG={met_c.get('yavg')}, res={met_c.get('width')}x{met_c.get('height')}",
+                    "duracion_video": t_vid,
+                })
+                continue
+            else:
+                rechazos_esc.append({
+                    "fuente": "Cache",
+                    "candidato": destino.name,
+                    "url": "",
+                    "motivo": f"Caché invalidado: {motivo_c}",
+                })
+                destino.unlink(missing_ok=True)
+
+        queries = list(getattr(esc, "broll_queries_en", []) or [])
+        if esc.broll_query_en and esc.broll_query_en.strip() not in queries:
+            queries.insert(0, esc.broll_query_en.strip())
+        if not queries:
+            queries = ["dark mysterious night"]
+
+        query_principal = queries[0]
         dur_pedida = max(5, int(duraciones.get(esc.id, 3.0)) + 3)
-        print(f"   [{i}/{total}] Buscando clip real de redes: '{query}'...")
+        print(f"   [{i}/{total}] Escena {esc.id}: Buscando clip 9:16 para '{query_principal}'...")
 
         exito = False
+        fuente_usada = "Fallback"
+        detalle_clip = ""
 
-        # 1. PRIORIDAD 1: Búsqueda de clip real en YouTube / Shorts / Noticias
-        if youtube_disponible():
-            queries_yt = [
-                f"{query} #shorts",
-                f"{query} news footage",
-                query,
-            ]
-            if len(query.split()) < 3 and p.tema:
-                queries_yt.insert(0, f"{p.tema} {query}")
-
-            for q_yt in queries_yt:
-                if not youtube_disponible():
+        # 1. PRIORIDAD 1: Fuentes con licencia segura (Pixabay vertical o HD recortable)
+        candidatos_pix = _buscar_candidatos_pixabay_vertical(queries, clips_usados)
+        for cand in candidatos_pix:
+            if descargar_archivo_directo(cand["url"], destino):
+                aprobado_st, motivo_st, met_st = analizar_calidad_visual_clip(
+                    destino, formato="9:16", min_yavg=25.0, es_fuente_youtube=False
+                )
+                if aprobado_st:
+                    exito = True
+                    fuente_usada = "Pixabay (Licencia Segura)"
+                    detalle_clip = (
+                        f"{cand['key']} (YAVG={met_st.get('yavg')}, "
+                        f"res={met_st.get('width')}x{met_st.get('height')}, tags='{cand['tags'][:45]}')"
+                    )
+                    clips_usados.add(cand["key"])
+                    clips_usados.add(cand["url"])
+                    print(f"      ✅ Clip 9:16 aprobado desde Pixabay [{cand['key']}] (YAVG={met_st.get('yavg')})")
                     break
-                vids = buscar_youtube_ids(q_yt, max_results=3)
-                for vid_id in vids:
-                    if not youtube_disponible():
-                        break
-                    print(f"      ⬇️ Descargando metraje real desde YouTube ({vid_id})...")
-                    exito = descargar_clip_social_yt(vid_id, destino, inicio_s=5, duracion_s=dur_pedida)
-                    if exito:
-                        print(f"      ✅ Clip real de redes sociales obtenido ({destino.name})")
-                        break
-                if exito:
-                    break
-        else:
-            print("      ↪️ YouTube omitido (bloqueado en esta sesión) -> pasando directo a Pixabay.")
+                else:
+                    destino.unlink(missing_ok=True)
+                    rechazos_esc.append({
+                        "fuente": "Pixabay",
+                        "candidato": cand["key"],
+                        "url": cand["url"],
+                        "motivo": f"Post-descarga FFmpeg: {motivo_st}",
+                    })
 
-        # 2. PRIORIDAD 2: Respaldo Pixabay si no hubo clips en YouTube
-        if not exito:
-            print(f"      ℹ️ No se obtuvo clip en YouTube. Intentando stock de respaldo en Pixabay...")
-            url_pix = buscar_clip_pixabay(query)
-            if url_pix:
-                exito = descargar_archivo_directo(url_pix, destino)
-                if exito:
-                    print(f"      ✅ Clip descargado desde Pixabay HD ({destino.name})")
+        # 2. PRIORIDAD 2: YouTube Creative Commons / archivo limpio (sin Shorts ni compilaciones)
+        if not exito and youtube_disponible():
+            clave_yt = descargar_clip_youtube(
+                query_principal,
+                destino,
+                inicio_s=6,
+                duracion_s=dur_pedida,
+                clips_usados=clips_usados,
+                formato="9:16",
+                rechazos_log=rechazos_esc,
+            )
+            if clave_yt:
+                exito = True
+                fuente_usada = "YouTube"
+                detalle_clip = clave_yt
+                print(f"      ✅ Clip 9:16 aprobado desde YouTube ({clave_yt})")
 
-        # 3. PRIORIDAD 3: Fondo cinematográfico abstracto en caso extremo
+        # 3. PRIORIDAD 3: Fondo cinematográfico si ningún candidato aprobó
         if not exito:
-            print(f"      ⚠️ Generando fondo cinematográfico abstracto para escena {esc.id}...")
+            fuente_usada = "Fallback"
+            detalle_clip = "fondo estilizado 9:16"
+            print(f"      ⚠️ Generando fondo cinematográfico 9:16 para escena {esc.id}...")
             ffmpeg = config.ffmpeg_bin("ffmpeg") or "ffmpeg"
             cmd_emergencia = [
                 ffmpeg, "-y",
-                "-f", "lavfi", "-i", "color=c=0x111625:s=1080x1920:r=30",
+                "-f", "lavfi", "-i", "color=c=0x1e2538:s=1080x1920:r=30",
                 "-t", f"{dur_pedida:.2f}",
                 "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
                 "-an", str(destino)
             ]
             try:
                 subprocess.run(cmd_emergencia, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                exito = es_video_valido(destino)
             except Exception:
                 pass
 
+        t_vid = obtener_duracion_video(destino) if exito else 0.0
+        creditos.append({
+            "escena": esc.id,
+            "archivo": destino.name if exito else None,
+            "fuente": fuente_usada,
+            "credito": f"{fuente_usada}: {detalle_clip}",
+            "detalle": detalle_clip,
+            "duracion_video": t_vid,
+        })
+
+    p.ruta("b_roll", "creditos.json").write_text(json.dumps(creditos, ensure_ascii=False, indent=2), "utf-8")
+    ruta_rep = p.ruta("b_roll", "broll_reporte.md")
+    generar_reporte_broll_md(ruta_rep, p.tema, "9:16", creditos, rechazos_por_escena)
     p.marcar("broll", "ok")
+    print(f"✨ Clips 9:16 listos. Reporte de rechazos: {ruta_rep}")
 
 
