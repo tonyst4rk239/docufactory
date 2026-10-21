@@ -203,9 +203,22 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
 from .broll import obtener_duracion_video, es_video_valido
 
 
+def _buscar_clip_complementario(p: Proyecto, actual: Path) -> Optional[Path]:
+    """Busca un segundo clip distinto dentro de b_roll/ para encadenar si el clip principal es corto."""
+    carpeta = p.ruta("b_roll")
+    if not carpeta.exists():
+        return None
+    candidatos = sorted(
+        [c for c in carpeta.glob("escena_*.mp4") if c.resolve() != actual.resolve() and es_video_valido(c)],
+        key=lambda c: obtener_duracion_video(c),
+        reverse=True,
+    )
+    return candidatos[0] if candidatos else None
+
+
 def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp4: Path, es_cierre: bool = False) -> bool:
-    """Renderiza el corte visual en 1080p con Host personalizado y texto clave superpuesto.
-    Aplica bucle fluido con zoom suave cuando el clip dura menos que el audio."""
+    """Renderiza el corte visual en 1080p con Host personalizado.
+    Si el clip dura menos que el audio, encadena un segundo clip distinto en lugar de repetir uno en loop."""
     ffmpeg = config.ffmpeg_bin("ffmpeg")
     broll_mp4 = p.ruta("b_roll", f"escena_{esc.id:03d}.mp4")
     broll_jpg = p.ruta("b_roll", f"escena_{esc.id:03d}.jpg")
@@ -219,26 +232,47 @@ def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp
 
     inputs = []
     filtros = []
+    num_inputs = 0
 
     if fondo_archivo and fondo_es_video:
-        # Siempre -stream_loop -1 para garantizar que jamás falten fotogramas
-        inputs += ["-stream_loop", "-1", "-i", str(fondo_archivo)]
-        # Preserva proporción original (clips verticales/TikTok quedan centrados con fondo negro sin zoom forzado)
-        filtros.append("[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30[bg]")
+        dur_clip = obtener_duracion_video(fondo_archivo)
+        segundo_clip = _buscar_clip_complementario(p, fondo_archivo) if (dur_clip + 0.25 < duracion) else None
+        if segundo_clip:
+            inputs += ["-i", str(fondo_archivo), "-stream_loop", "-1", "-i", str(segundo_clip)]
+            num_inputs = 2
+            filtros.append(
+                "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                "pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30,format=yuv420p[bg0]"
+            )
+            filtros.append(
+                "[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                "pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30,format=yuv420p[bg1]"
+            )
+            filtros.append("[bg0][bg1]concat=n=2:v=1:a=0[bg]")
+        else:
+            inputs += ["-stream_loop", "-1", "-i", str(fondo_archivo)]
+            num_inputs = 1
+            filtros.append(
+                "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                "pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30[bg]"
+            )
     elif fondo_archivo and not fondo_es_video:
         inputs += ["-loop", "1", "-i", str(fondo_archivo)]
+        num_inputs = 1
         filtros.append("[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30[bg]")
     else:
         inputs += ["-f", "lavfi", "-i", "color=c=0x111625:s=1920x1080:r=30"]
+        num_inputs = 1
         filtros.append("[0:v]null[bg]")
 
     v_previo = "[bg]"
     if host_sprite and host_sprite.exists():
         tight_sprite = config.ASSETS / "host_tight" / host_sprite.name
         sprite_a_usar = tight_sprite if tight_sprite.exists() else host_sprite
+        host_idx = num_inputs
         inputs += ["-loop", "1", "-i", str(sprite_a_usar)]
         pos_x = "1920-w-80" if esc.host_lado == "derecha" else "80"
-        filtros.append("[1:v]scale=-1:750[host]")
+        filtros.append(f"[{host_idx}:v]scale=-1:750[host]")
         filtros.append(f"{v_previo}[host]overlay={pos_x}:1080-h:shortest=1[v_con_host]")
         v_previo = "[v_con_host]"
 

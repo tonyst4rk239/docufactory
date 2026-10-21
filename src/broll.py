@@ -523,7 +523,7 @@ def _seleccionar_mejor_stock(
     clips_usados: set[str],
 ) -> list[dict]:
     """Busca y puntúa candidatos en orden: Pexels (si hay API key) -> Pixabay.
-    Devuelve la lista ordenada de candidatos que NO chocan con el mood ni están repetidos."""
+    Prioriza clips con duración >= dur_audio y devuelve candidatos que NO chocan con el mood ni están repetidos."""
     queries = _consultas_escena(esc)
     candidatos_pexels = _buscar_candidatos_pexels(queries) if config.PEXELS_API_KEY else []
     evaluados_pexels = _puntuar_y_filtrar_candidatos(candidatos_pexels, esc, dur_audio, clips_usados)
@@ -531,19 +531,135 @@ def _seleccionar_mejor_stock(
     candidatos_pixabay = _buscar_candidatos_pixabay(queries)
     evaluados_pixabay = _puntuar_y_filtrar_candidatos(candidatos_pixabay, esc, dur_audio, clips_usados)
 
-    # Si Pexels tiene candidatos con coincidencia real de query, van primero; luego Pixabay con query;
-    # después los que al menos no chocan con el mood ordenados por score.
+    # Priorizar: 1) duracion >= dur_audio (cubre toda la escena sin cortes), 2) score de relevancia, 3) Pexels sobre Pixabay
     con_query = [c for c in (evaluados_pexels + evaluados_pixabay) if c["hits_query"] > 0]
-    con_query.sort(key=lambda c: (c["score"], 1 if c["fuente"] == "Pexels" else 0), reverse=True)
+    con_query.sort(
+        key=lambda c: (
+            1 if float(c.get("duracion") or 0.0) >= dur_audio else 0,
+            c["score"],
+            1 if c["fuente"] == "Pexels" else 0,
+            float(c.get("duracion") or 0.0),
+        ),
+        reverse=True,
+    )
 
     sin_query = [c for c in (evaluados_pexels + evaluados_pixabay) if c["hits_query"] == 0]
-    sin_query.sort(key=lambda c: (c["score"], 1 if c["fuente"] == "Pexels" else 0), reverse=True)
+    sin_query.sort(
+        key=lambda c: (
+            1 if float(c.get("duracion") or 0.0) >= dur_audio else 0,
+            c["score"],
+            1 if c["fuente"] == "Pexels" else 0,
+            float(c.get("duracion") or 0.0),
+        ),
+        reverse=True,
+    )
 
     return con_query + sin_query
 
 
+def _concatenar_clips_broll(clips: list[Path], destino: Path) -> bool:
+    """Normaliza a 1920x1080 30fps (sin deformar aspecto) y encadena 2 o más clips distintos en un solo MP4 sin audio."""
+    ffmpeg = config.ffmpeg_bin("ffmpeg") or "ffmpeg"
+    validos = [c for c in clips if c.exists() and es_video_valido(c)]
+    if len(validos) < 2:
+        return False
+
+    temp_concat = destino.with_suffix(".chained_tmp.mp4")
+    inputs: list[str] = []
+    filtros: list[str] = []
+    etiquetas: list[str] = []
+
+    for idx, c in enumerate(validos):
+        inputs += ["-i", str(c)]
+        filtros.append(
+            f"[{idx}:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+            f"pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30,format=yuv420p[v{idx}]"
+        )
+        etiquetas.append(f"[v{idx}]")
+
+    filtro_str = f"{';'.join(filtros)};{''.join(etiquetas)}concat=n={len(validos)}:v=1:a=0[vout]"
+    cmd = [
+        ffmpeg, "-y",
+        *inputs,
+        "-filter_complex", filtro_str,
+        "-map", "[vout]",
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        "-an",
+        str(temp_concat),
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        if es_video_valido(temp_concat):
+            temp_concat.replace(destino)
+            return True
+    except Exception:
+        pass
+    temp_concat.unlink(missing_ok=True)
+    return False
+
+
+def _completar_clip_corto_con_stock(
+    esc: Escena,
+    destino_clip: Path,
+    dur_audio: float,
+    clips_usados: set[str],
+    candidatos_precalculados: Optional[list[dict]] = None,
+) -> list[str]:
+    """Si el clip descargado dura menos que la escena, descarga 1 (o 2) clips adicionales DISTINTOS
+    y los encadena para cubrir la duración sin repetir jamás el mismo clip en loop."""
+    t_actual = obtener_duracion_video(destino_clip)
+    if t_actual <= 0.0 or t_actual + 0.25 >= dur_audio:
+        return []
+
+    faltante = max(3.0, dur_audio - t_actual)
+    candidatos = (
+        [c for c in candidatos_precalculados if c["key"] not in clips_usados and c["url"] not in clips_usados]
+        if candidatos_precalculados is not None
+        else _seleccionar_mejor_stock(esc, faltante, clips_usados)
+    )
+    if not candidatos:
+        return []
+
+    partes_extra: list[Path] = []
+    claves_extra: list[str] = []
+    dur_acum = t_actual
+
+    try:
+        for cand in candidatos:
+            if dur_acum + 0.25 >= dur_audio or len(partes_extra) >= 2:
+                break
+            if cand["key"] in clips_usados or cand["url"] in clips_usados:
+                continue
+            tmp_extra = destino_clip.parent / f"tmp_extra_{esc.id:03d}_{len(partes_extra)+1}.mp4"
+            if descargar_archivo_directo(cand["url"], tmp_extra):
+                d_ext = obtener_duracion_video(tmp_extra)
+                if d_ext > 0.5:
+                    partes_extra.append(tmp_extra)
+                    claves_extra.append(cand["key"])
+                    clips_usados.add(cand["key"])
+                    clips_usados.add(cand["url"])
+                    dur_acum += d_ext
+                else:
+                    tmp_extra.unlink(missing_ok=True)
+
+        if partes_extra:
+            if _concatenar_clips_broll([destino_clip, *partes_extra], destino_clip):
+                t_nueva = obtener_duracion_video(destino_clip)
+                print(
+                    f"      🔗 Escena {esc.id}: Clip inicial corto ({t_actual:.1f}s < {dur_audio:.1f}s) "
+                    f"-> encadenado con {len(partes_extra)} clip(s) distinto(s) {claves_extra} (total: {t_nueva:.1f}s)."
+                )
+                return claves_extra
+    finally:
+        for p_tmp in partes_extra:
+            p_tmp.unlink(missing_ok=True)
+
+    return []
+
+
 def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> list[dict]:
-    """Descarga clips de YouTube/Stock optimizados para cada escena, filtrando por mood y sin repetir."""
+    """Descarga clips de YouTube/Stock optimizados para cada escena, filtrando por mood, sin repetir
+    y encadenando 2 clips distintos cuando uno solo sea más corto que el audio de la escena."""
     from .voz import obtener_duracion_wav
 
     guion = cargar_guion(p)
@@ -571,9 +687,17 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
             if es_video_valido(destino_clip):
                 t_vid = obtener_duracion_video(destino_clip)
                 print(f"   [{i}/{total}] Escena {esc.id}: Reutilizando clip ({destino_clip.name}, {t_vid:.1f}s)")
-                if t_vid < dur_audio:
-                    print(f"      ℹ️ Clip ({t_vid:.1f}s) < Audio ({dur_audio:.1f}s).")
-                creditos.append({"escena": esc.id, "archivo": destino_clip.name, "fuente": "Cache", "duracion_video": t_vid})
+                extras_cache: list[str] = []
+                if t_vid + 0.25 < dur_audio:
+                    extras_cache = _completar_clip_corto_con_stock(esc, destino_clip, dur_audio, clips_usados)
+                    t_vid = obtener_duracion_video(destino_clip)
+                creditos.append({
+                    "escena": esc.id,
+                    "archivo": destino_clip.name,
+                    "fuente": "Cache+Chained" if extras_cache else "Cache",
+                    "detalle": f"encadenado con {extras_cache}" if extras_cache else "cache",
+                    "duracion_video": t_vid,
+                })
                 continue
             else:
                 print(f"   ⚠️ Escena {esc.id}: Clip en caché corrupto o truncado ({destino_clip.name}). Eliminando y re-descargando...")
@@ -585,6 +709,7 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
         fuente_usada = "Fallback"
         detalle_clip = ""
         exito = False
+        candidatos_stock: Optional[list[dict]] = None
 
         if youtube_disponible():
             print(f"   [{i}/{total}] Buscando en YouTube para Escena {esc.id}: '{query_yt}' ({dur_descarga}s solicitados)...")
@@ -614,6 +739,15 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
                     print(f"      ✅ Escena {esc.id}: Clip curado de {fuente_usada} [{cand['key']}] "
                           f"(score {cand['score']}, {cand['duracion']:.1f}s, tags: {cand['tags'][:50]})")
                     break
+
+        # Si el clip descargado dura menos que el audio de la escena, encadenar un 2º clip distinto en lugar de hacer loop
+        if exito:
+            extras = _completar_clip_corto_con_stock(
+                esc, destino_clip, dur_audio, clips_usados, candidatos_precalculados=candidatos_stock
+            )
+            if extras:
+                fuente_usada = f"{fuente_usada}+Chained"
+                detalle_clip = f"{detalle_clip} + {extras}"
 
         if not exito:
             # Respaldo de emergencia estilizado
