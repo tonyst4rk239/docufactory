@@ -13,6 +13,14 @@ assets/host/_candidatos/
 assets/host_original_backup/
 assets/audio/
 assets/broll_viral/
+assets/music/*/*
+!assets/music/*/.gitkeep
+assets/overlays/*/*
+!assets/overlays/*/.gitkeep
+assets/sfx/*/*
+!assets/sfx/*/.gitkeep
+assets/.credits_manifest.json
+!assets/CREDITS.md
 *.log
 test_*.mp4
 test_*.wav
