@@ -30,13 +30,25 @@ class Escena(BaseModel):
     pose: Pose
     host_visible: bool
     host_lado: Lado
-    broll_query_en: str = Field(description="3-6 palabras EN INGLÉS para buscar en Pexels/Pixabay.")
+    broll_query_en: str = Field(description="Consulta principal (3-5 palabras EN INGLÉS) para buscar en Pexels/Pixabay/YouTube.")
+    broll_queries_en: list[str] = Field(
+        default_factory=list,
+        description="2 a 3 consultas en inglés concretas y filmables (de más específica a visualmente equivalente) para Pexels/Pixabay.",
+    )
+    broll_mood_keywords: list[str] = Field(
+        default_factory=list,
+        description="2 a 4 palabras de atmósfera/mood en inglés (ej. ['dark', 'cinematic', 'night', 'mysterious', 'archival']).",
+    )
+    broll_avoid_keywords: list[str] = Field(
+        default_factory=list,
+        description="3 a 6 términos en inglés que deben rechazarse si aparecen en los tags porque chocan con el mood o son falsos amigos visuales (ej. ['escalator', 'beach', 'sunny', 'happy', 'party']).",
+    )
     broll_descripcion: str = Field(description="Descripción visual concreta del plano ideal, en español.")
     texto_pantalla: str = Field(description="2-4 palabras clave en MAYÚSCULAS, o cadena vacía.")
     sfx: Sfx
     music_mood: Mood
-    short_id: Optional[int] = Field(description="1, 2 o 3 si la escena pertenece a un Short; null si no.")
-    capitulo: Optional[str] = Field(description="Título de capítulo si esta escena abre uno; null si no.")
+    short_id: Optional[int] = Field(default=None, description="1, 2 o 3 si la escena pertenece a un Short; null si no.")
+    capitulo: Optional[str] = Field(default=None, description="Título de capítulo si esta escena abre uno; null si no.")
 
 
 class Guion(BaseModel):
@@ -129,7 +141,13 @@ REGLAS ESTRICTAS DE FORMATO TOP:
   * Durante las explicaciones técnicas: 'explicando' o 'pensativo'.
   * En la intro/cierre: 'neutro' o 'riendo'.
 - host_visible: true al anunciar cada puesto (#X) y en la conclusión; pon host_visible = false cuando se deba ver el clip a pantalla completa.
-- broll_query_en: IMPORTANTE: incluye términos específicos y precisos en inglés para descargar clips REALES de archivo, noticias, entrevistas, celebridades y juicios (ej: "Sean Diddy Combs court hearing press conference", "Diddy mansion raid footage news", "celebrities red carpet party Sean Combs").
+- broll_query_en y broll_queries_en:
+  * Genera en `broll_queries_en` ENTRE 2 y 3 consultas en inglés (3-5 palabras cada una) pensadas para bancos de video (Pexels/Pixabay) y archivo (YouTube).
+  * La primera consulta debe describir el objeto/lugar literal de la escena (ej. "dark elevator interior closing", "ancient leather manuscript candle").
+  * La segunda y tercera consulta deben ser planos alternativos concretos y visuales del mismo concepto (ej. "security camera hallway night", "old library dusty books").
+  * Pon en `broll_query_en` la misma primera consulta principal.
+- broll_mood_keywords: lista de 2 a 4 adjetivos visuales en inglés acordes al tono de la escena (ej. ["dark", "cinematic", "night", "eerie"] para misterio/tensión).
+- broll_avoid_keywords: lista de 3 a 6 palabras en inglés que PROHÍBES en los resultados porque arruinan la escena o son falsos amigos (ej. si hablas de un elevador pon ["escalator", "mall", "shopping"]; si hablas de un manuscrito antiguo pon ["beach", "sunny", "vacation", "tablet", "happy"]).
 - sfx: pon 'whoosh' o 'transicion' al entrar a un nuevo puesto (#X); pon 'ninguno' en el resto.
 
 MATERIAL:
@@ -161,9 +179,13 @@ def estructurar(material: str, minutos: float) -> Guion:
                         temperature=0.4,
                     ),
                 )
-                if resp.parsed is not None:
-                    return resp.parsed
-                return Guion.model_validate_json(resp.text)
+                guion_obj = resp.parsed if resp.parsed is not None else Guion.model_validate_json(resp.text)
+                for esc in guion_obj.escenas:
+                    if not esc.broll_queries_en and esc.broll_query_en:
+                        esc.broll_queries_en = [esc.broll_query_en]
+                    elif esc.broll_queries_en and not esc.broll_query_en:
+                        esc.broll_query_en = esc.broll_queries_en[0]
+                return guion_obj
             except Exception as e:
                 print(f"⚠️ Reintento {intento+1}/3 con modelo {mod} tras aviso: {e}")
                 time.sleep(3)
@@ -182,12 +204,16 @@ def _montaje_txt(p: Proyecto, g: Guion) -> str:
         if e.capitulo:
             lineas.append(f"\n=== CAPÍTULO: {e.capitulo} ===")
         short = f"  [SHORT {e.short_id}]" if e.short_id else ""
+        queries_str = " | ".join(e.broll_queries_en) if e.broll_queries_en else e.broll_query_en
+        mood_kw = ", ".join(e.broll_mood_keywords) if e.broll_mood_keywords else "-"
+        avoid_kw = ", ".join(e.broll_avoid_keywords) if e.broll_avoid_keywords else "-"
         lineas += [
             f"\n{int(ini//60)}:{int(ini%60):02d} - {int(fin//60)}:{int(fin%60):02d} | Escena {e.id} ({e.acto}){short}",
             f"  -> VOICEOFF: \"{e.voz}\"",
             f"  -> VISUAL: " + (f"Host '{e.pose}' a la {e.host_lado}" if e.host_visible else "B-roll a pantalla completa")
             + (f" | TEXTO: {e.texto_pantalla}" if e.texto_pantalla else ""),
-            f"  -> B-ROLL: {e.broll_descripcion}  (búsqueda: {e.broll_query_en})",
+            f"  -> B-ROLL: {e.broll_descripcion}  (búsquedas: {queries_str})",
+            f"  -> MOOD TAGS: [{mood_kw}] | EVITAR: [{avoid_kw}]",
             f"  -> SFX: {e.sfx} | MÚSICA: {e.music_mood}",
         ]
     lineas.append(f"\nDURACIÓN ESTIMADA: {int(t//60)}:{int(t%60):02d}")
