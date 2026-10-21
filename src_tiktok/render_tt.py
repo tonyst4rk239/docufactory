@@ -19,6 +19,7 @@ from src.edicion import (
 )
 from src.estado import Proyecto
 from src.render import _obtener_sfx, _obtener_musica_fondo
+from src.voz import limpiar_tags_ssml
 from src_tiktok.guion_tt import GuionTikTok
 
 
@@ -72,7 +73,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         t_fin_esc = t_act + dur
         t_act = t_fin_esc
 
-        palabras = [w.strip() for w in (esc.voz or "").split() if w.strip()]
+        voz_limpia = limpiar_tags_ssml(esc.voz or "")
+        palabras = [w.strip() for w in voz_limpia.split() if w.strip()]
         if not palabras:
             continue
 
@@ -235,59 +237,110 @@ def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, f
     ]
     subprocess.run(cmd_cat, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 3. Diseño de sonido vertical (Voz + Música con sidechaincompress ducking + SFX en cada corte)
-    print("🎧 Mezclando audio vertical dinámico con sidechain ducking y transiciones sonoras...")
+    # 3. Diseño de sonido vertical (Stems + Voz con sidechaincompress ducking + Versión Sin Voz)
+    print("🎧 Mezclando audio vertical dinámico con sidechain ducking y exportando salida dual (_con_voz_ia / _sin_voz)...")
     total_dur = sum(duraciones.values())
+    slug = p.datos.get("slug", "tiktok")
 
     lista_voz = temp_dir / "concat_voz.txt"
-    lista_voz.write_text("\n".join([f"file '{p.ruta('voz', f'escena_{esc.id:03d}.mp3').resolve().as_posix()}'" for esc in guion.escenas]), encoding="utf-8")
-    voz_full = temp_dir / "voz_full.wav"
-    cmd_voz = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(lista_voz), "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2", str(voz_full)]
+    lista_voz.write_text(
+        "\n".join([f"file '{p.ruta('voz', f'escena_{esc.id:03d}.mp3').resolve().as_posix()}'" for esc in guion.escenas]),
+        encoding="utf-8",
+    )
+    voz_master = carpeta_renders / "voz_ia_master.wav"
+    cmd_voz = [
+        ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(lista_voz),
+        "-af", "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11",
+        "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2", str(voz_master)
+    ]
     subprocess.run(cmd_voz, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    musica_src = _obtener_musica_fondo("misterio") or _obtener_musica_fondo("tension")
+    mood_general = getattr(guion, "mood", "misterio") or "misterio"
+    musica_src = _obtener_musica_fondo(mood_general) or _obtener_musica_fondo("misterio") or _obtener_musica_fondo("tension")
     whoosh_sfx = _obtener_sfx("whoosh") or _obtener_sfx("transicion")
 
-    audio_inputs = ["-i", str(voz_full), "-stream_loop", "-1", "-i", str(musica_src)]
+    # Construir stem MDE (Música + SFX sin voz) para poder exportar tanto _con_voz_ia.mp4 como _sin_voz.mp4
+    mde_master = carpeta_renders / "mde_mix.wav"
+    mde_inputs = ["-stream_loop", "-1", "-i", str(musica_src)]
+    mde_filters = [
+        f"[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,atrim=0:{total_dur:.2f},volume=0.26[bgm]"
+    ]
+    mde_mix_tags = ["[bgm]"]
+
+    t_acum = 0.0
+    for idx_m, esc in enumerate(guion.escenas[1:], 1):
+        t_acum += duraciones.get(esc.id - 1, 2.5)
+        delay_ms = int(t_acum * 1000)
+        sfx_esc = _obtener_sfx(getattr(esc, "sfx", "whoosh") or "whoosh") or whoosh_sfx
+        mde_inputs += ["-i", str(sfx_esc)]
+        mde_filters.append(
+            f"[{idx_m}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,adelay={delay_ms}|{delay_ms},volume=0.80[sfx{idx_m}]"
+        )
+        mde_mix_tags.append(f"[sfx{idx_m}]")
+
+    cadena_mde = f"{';'.join(mde_filters)};{''.join(mde_mix_tags)}amix=inputs={len(mde_mix_tags)}:duration=first:normalize=0[mde_out]"
+    cmd_mde = [
+        ffmpeg, "-y",
+        *mde_inputs,
+        "-filter_complex", cadena_mde,
+        "-map", "[mde_out]",
+        "-t", f"{total_dur:.2f}",
+        "-c:a", "pcm_s16le", "-ar", "44100", "-ac", "2",
+        str(mde_master),
+    ]
+    subprocess.run(cmd_mde, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     duck_cfg = cfg.get("audio", {}).get("ducking_sidechain", {})
     thr = float(duck_cfg.get("threshold", 0.035))
     rat = float(duck_cfg.get("ratio", 5.0))
     atk = int(duck_cfg.get("attack_ms", 35))
     rel = int(duck_cfg.get("release_ms", 450))
+    fade_st = max(0.0, total_dur - 0.4)
 
-    filter_parts = [
-        "[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.2,asplit=2[vocal][v_sc]",
-        "[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.22[bgm_raw]",
-        f"[bgm_raw][v_sc]sidechaincompress=threshold={thr:.3f}:ratio={rat:.1f}:attack={atk}:release={rel}:makeup=1.0[bgm]",
-    ]
-    mix_elements = ["[vocal]", "[bgm]"]
+    cadena_audio_ia = (
+        f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0,asplit=2[vocal][v_sc];"
+        f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.95[mde_in];"
+        f"[mde_in][v_sc]sidechaincompress=threshold={thr:.3f}:ratio={rat:.1f}:attack={atk}:release={rel}:makeup=1.0[mde_duck];"
+        f"[vocal][mde_duck]amix=inputs=2:normalize=0,afade=t=out:st={fade_st:.2f}:d=0.4[aout]"
+    )
 
-    t_acum = 0.0
-    for idx, esc in enumerate(guion.escenas[1:], 3):
-        t_acum += duraciones.get(esc.id - 1, 2.5)
-        delay_ms = int(t_acum * 1000)
-        audio_inputs += ["-i", str(whoosh_sfx)]
-        filter_parts.append(
-            f"[{idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,adelay={delay_ms}|{delay_ms},volume=0.80[sfx{idx}]"
-        )
-        mix_elements.append(f"[sfx{idx}]")
-
-    cadena_audio = f"{';'.join(filter_parts)};{''.join(mix_elements)}amix=inputs={len(mix_elements)}:normalize=0[aout]"
-
-    video_final_tiktok = carpeta_renders / f"{p.datos.get('slug', 'tiktok')}_tiktok_vertical.mp4"
-    cmd_final = [
+    video_con_voz = carpeta_renders / f"{slug}_con_voz_ia.mp4"
+    cmd_con_voz = [
         ffmpeg, "-y",
         "-i", str(video_mudo),
-        *audio_inputs,
-        "-filter_complex", cadena_audio,
+        "-i", str(voz_master),
+        "-i", str(mde_master),
+        "-filter_complex", cadena_audio_ia,
         "-map", "0:v",
         "-map", "[aout]",
         "-c:v", "copy",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         "-t", f"{total_dur:.2f}",
         "-movflags", "+faststart",
-        str(video_final_tiktok)
+        str(video_con_voz)
     ]
-    subprocess.run(cmd_final, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"🏆 ¡VIDEO VERTICAL DE TIKTOK COMPLETADO!: {video_final_tiktok}")
-    return video_final_tiktok
+    subprocess.run(cmd_con_voz, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    video_sin_voz = carpeta_renders / f"{slug}_sin_voz.mp4"
+    cmd_sin_voz = [
+        ffmpeg, "-y",
+        "-i", str(video_mudo),
+        "-i", str(mde_master),
+        "-filter_complex", f"[1:a]afade=t=out:st={fade_st:.2f}:d=0.4[a_clean]",
+        "-map", "0:v",
+        "-map", "[a_clean]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        "-t", f"{total_dur:.2f}",
+        "-movflags", "+faststart",
+        str(video_sin_voz)
+    ]
+    subprocess.run(cmd_sin_voz, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    p.marcar("render", "ok")
+    return {
+        "voz_master": voz_master,
+        "mde_master": mde_master,
+        "video_con_voz": video_con_voz,
+        "video_sin_voz": video_sin_voz,
+    }
