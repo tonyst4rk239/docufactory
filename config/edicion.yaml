@@ -1,0 +1,141 @@
+# ==============================================================================
+# Docu Factory — Configuración Central de Edición y Efectos (FFmpeg)
+# ==============================================================================
+# Todos los efectos pueden activarse/desactivarse globalmente o por formato
+# (horizontal_16_9 y vertical_9_16) y ajustar sus intensidades sin tocar código.
+# Si falta algún asset en disco, el motor degrada con elegancia al efecto
+# equivalente de FFmpeg o al mood más cercano.
+
+formatos:
+  horizontal_16_9:
+    fps: 30
+    resolucion: [1920, 1080]
+    color_grading: true
+    vignette: true
+    film_grain_ffmpeg: true
+    video_overlay: true
+    ken_burns: true
+    transiciones_xfade: true
+    top_rank_fx: true
+    audio_ducking_sidechain: true
+
+  vertical_9_16:
+    fps: 30
+    resolucion: [1080, 1920]
+    duracion_corte_min_s: 2.0
+    duracion_corte_max_s: 3.0
+    color_grading: true
+    vignette: true
+    film_grain_ffmpeg: true
+    video_overlay: true
+    zoom_punch: true
+    subtitulos_karaoke: true
+    audio_ducking_sidechain: true
+
+color_grading:
+  enabled: true
+  moods:
+    misterio:
+      # Frío y desaturado (look documental investigativo oscuro)
+      saturation: 0.72
+      contrast: 1.12
+      brightness: -0.03
+      colorbalance: "rs=-0.08:gs=-0.02:bs=0.14:rm=-0.05:gm=0.00:bm=0.08"
+    tension:
+      # Contraste agresivo frío con sombras densas
+      saturation: 0.68
+      contrast: 1.18
+      brightness: -0.04
+      colorbalance: "rs=-0.08:gs=0.03:bs=0.12:rm=-0.04:gm=0.02:bm=0.06"
+    epica:
+      # Contraste cálido cinematográfico (dorado / ámbar en altas luces)
+      saturation: 1.12
+      contrast: 1.16
+      brightness: -0.01
+      colorbalance: "rs=0.08:gs=0.02:bs=-0.08:rm=0.10:gm=0.03:bm=-0.06:rh=0.06"
+    curiosidad:
+      # Look documental moderno (teal & orange sutil)
+      saturation: 0.94
+      contrast: 1.10
+      brightness: -0.01
+      colorbalance: "rs=-0.03:bs=0.06:rm=0.04:bm=0.04:rh=0.05"
+    calma:
+      # Suave y equilibrado
+      saturation: 0.90
+      contrast: 1.04
+      brightness: 0.01
+      colorbalance: "rm=0.04:gm=0.01:bm=0.03"
+
+textura_visual:
+  vignette:
+    enabled: true
+    angle: "PI/5"
+  film_grain_ffmpeg:
+    enabled: true
+    alls: 8
+    allf: "t"
+  video_overlay:
+    enabled: true
+    blend_mode: "screen"
+    opacity: 0.18          # Rango recomendado: 0.15 a 0.25 (15% - 25%)
+    por_mood:
+      misterio: ["dust_overlay", "film_grain", "vhs"]
+      tension: ["film_grain", "glitch", "vhs"]
+      epica: ["light_leak", "dust_overlay", "film_grain"]
+      curiosidad: ["dust_overlay", "light_leak", "film_grain"]
+      calma: ["dust_overlay", "light_leak"]
+
+ken_burns:
+  enabled: true
+  zoom_inicial: 1.00
+  zoom_final: 1.08
+  aplicar_en_estaticos: true
+  aplicar_en_clips_cortos: true
+
+transiciones:
+  enabled: true
+  duracion_s: 0.35
+  tipos_normales: ["fade", "fadeblack", "smoothleft"]
+  en_cambio_top: "glitch"
+  sfx_whoosh: true
+
+top_rank_fx:
+  enabled: true
+  riser_enabled: true
+  riser_lead_s: 1.5        # Riser entra 1.5s antes de cada tarjeta TOP #N
+  riser_volume: 0.65
+  impact_enabled: true
+  impact_volume: 0.85
+  flash_glitch_enabled: true
+  flash_duracion_s: 0.35
+  rgbashift_rh: -6
+  rgbashift_bh: 6
+  flash_brightness: 0.12
+
+audio:
+  ducking_sidechain:
+    enabled: true
+    musica_volumen_base: 0.28
+    threshold: 0.035
+    ratio: 5.0
+    attack_ms: 35
+    release_ms: 450
+    makeup: 1.0
+  lufs_target: -16.0
+
+reels_9_16:
+  cortes_rapidos:
+    enabled: true
+    min_s: 2.0
+    max_s: 3.0
+  karaoke:
+    enabled: true
+    font_size: 112
+    palabras_por_linea: 3
+    color_activo: "&H0000FFFF&"     # Amarillo neón
+    color_inactivo: "&H00FFFFFF&"   # Blanco
+    color_keyword: "&H00FFFF00&"    # Cian neón
+  zoom_punch:
+    enabled: true
+    factor: 1.08
+    duracion_s: 0.35

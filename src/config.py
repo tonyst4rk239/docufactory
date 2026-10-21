@@ -16,14 +16,17 @@ ASSETS = RAIZ / "assets"
 HOST_DIR = ASSETS / "host"
 SFX_DIR = ASSETS / "sfx"
 MUSIC_DIR = ASSETS / "music"
+OVERLAYS_DIR = ASSETS / "overlays"
 FONTS_DIR = ASSETS / "fonts"
 PROYECTOS = RAIZ / "proyectos"
+CONFIG_EDICION_YAML = RAIZ / "config" / "edicion.yaml"
 
 # --- Claves ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GOOGLE_TTS_API_KEY = os.getenv("GOOGLE_TTS_API_KEY", "")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
+FREESOUND_API_KEY = os.getenv("FREESOUND_API_KEY", "")
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 
 
@@ -73,7 +76,11 @@ POSES_POR_MOOD: dict[str, list[str]] = {
     "curiosidad": ["explicando", "pensativo", "sorprendido", "duda", "senalando", "esceptico", "aprobando"],
     "calma": ["explicando", "pensativo", "aprobando", "senalando"],
 }
-SFX_CATEGORIAS = ["ninguno", "whoosh", "impacto", "tension", "revelacion", "glitch", "ambiente", "digital", "transicion"]
+SFX_CATEGORIAS = [
+    "ninguno", "whoosh", "riser", "impact", "impacto", "tension",
+    "revelacion", "glitch", "ambiente", "digital", "transicion", "click", "teclado",
+]
+OVERLAY_TIPOS = ["film_grain", "dust_overlay", "light_leak", "glitch", "vhs"]
 MUSIC_MOODS = ["misterio", "tension", "epica", "curiosidad", "calma"]
 MUSIC_FALLBACKS: dict[str, list[str]] = {
     "tension": ["misterio", "curiosidad", "calma"],
@@ -83,14 +90,16 @@ MUSIC_FALLBACKS: dict[str, list[str]] = {
     "calma": ["curiosidad", "misterio"],
 }
 SFX_FALLBACKS: dict[str, list[str]] = {
-    "tension": ["impacto", "revelacion", "glitch"],
+    "riser": ["whoosh", "tension", "transicion"],
+    "impact": ["impacto", "revelacion", "whoosh"],
+    "impacto": ["impact", "revelacion", "whoosh"],
+    "tension": ["impacto", "impact", "revelacion", "glitch"],
     "ambiente": ["whoosh", "transicion"],
     "digital": ["glitch", "teclado", "click"],
-    "whoosh": ["transicion", "impacto"],
+    "whoosh": ["transicion", "impacto", "impact"],
     "transicion": ["whoosh", "click"],
-    "impacto": ["revelacion", "whoosh"],
-    "revelacion": ["impacto", "glitch"],
-    "glitch": ["revelacion", "impacto"],
+    "revelacion": ["impacto", "impact", "glitch"],
+    "glitch": ["revelacion", "digital", "impacto"],
     "teclado": ["click", "transicion"],
     "click": ["teclado", "transicion"],
 }
