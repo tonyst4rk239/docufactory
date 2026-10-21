@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import Optional
 
 from . import config
+from .edicion import (
+    cargar_config_edicion,
+    construir_filtro_color_textura,
+    construir_filtro_ken_burns,
+    resolver_overlay_por_mood,
+)
 from .estado import Proyecto
 from .guion import cargar_guion, Guion, Escena, extraer_top_n, asegurar_tarjetas_top
 from .host_anim import obtener_sprite
@@ -70,7 +76,7 @@ def resolver_sfx_categoria(cat: str, silencioso: bool = False) -> tuple[Optional
     if directo is not None:
         return directo, cat, False
 
-    candidatos_fb = config.SFX_FALLBACKS.get(cat, ["impacto", "whoosh", "transicion"])
+    candidatos_fb = config.SFX_FALLBACKS.get(cat, ["impacto", "impact", "whoosh", "transicion"])
     for fb in candidatos_fb:
         elegido = _elegir_de_carpeta(fb)
         if elegido is not None:
@@ -127,15 +133,16 @@ def _obtener_musica_fondo(mood: str = "misterio") -> Optional[Path]:
 
 
 def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemplazo: Optional[Path] = None) -> tuple[Path, Path]:
-    """Crea stems/voz_ia_master.wav y stems/mde_mix.wav con diseño sonoro completo (música + SFX)."""
+    """Crea stems/voz_ia_master.wav y stems/mde_mix.wav con diseño sonoro completo (música + riser + impact + whoosh)."""
     ffmpeg = config.ffmpeg_bin("ffmpeg")
+    cfg = cargar_config_edicion()
     carpeta_stems = p.carpeta / "stems"
     carpeta_stems.mkdir(parents=True, exist_ok=True)
     guion = cargar_guion(p)
     asegurar_tarjetas_top(guion, top_n=extraer_top_n(p.tema, float(p.datos.get("minutos", 1.0))))
     duracion_total = sum(duraciones.values())
 
-    # 1. PISTA DE VOZ (IA o Reemplazo Humano)
+    # 1. PISTA DE VOZ (IA o Reemplazo Humano) — conserva intacta la masterización -16 LUFS y highpass 80 Hz
     voz_master = carpeta_stems / "voz_ia_master.wav"
     if audio_voz_reemplazo and audio_voz_reemplazo.exists():
         cmd_norm = [
@@ -159,23 +166,22 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
 
     # 2. PISTA DE MÚSICA Y EFECTOS DE SONIDO (MDE MIX)
     mde_master = carpeta_stems / "mde_mix.wav"
+    vol_musica = float(cfg.get("audio", {}).get("ducking_sidechain", {}).get("musica_volumen_base", 0.28))
 
-    # A) Pista de Música en Loop ajustada a la duración total con ducking suave
+    # A) Pista de Música en Loop ajustada a la duración total
     pista_musica = _obtener_musica_fondo(guion.escenas[0].music_mood if guion.escenas else "misterio")
     temp_musica = carpeta_stems / "temp_music_bed.wav"
     if pista_musica:
-        # Loop de música con volumen base sutil (-20 dB aprox, volume=0.22)
         cmd_musica = [
             ffmpeg, "-y",
             "-stream_loop", "-1", "-i", str(pista_musica),
             "-t", f"{duracion_total:.2f}",
-            "-af", "volume=0.22,afade=t=in:ss=0:d=1.5,afade=t=out:st=" + f"{max(0, duracion_total - 2.5):.2f}" + ":d=2.5",
+            "-af", f"volume={vol_musica:.2f},afade=t=in:ss=0:d=1.5,afade=t=out:st={max(0, duracion_total - 2.5):.2f}:d=2.5",
             "-ar", "24000", "-ac", "1",
             "-c:a", "pcm_s16le", str(temp_musica)
         ]
         _ejecutar_cmd(cmd_musica)
     else:
-        # Silencio si no hay pista
         cmd_silencio = [
             ffmpeg, "-y", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
             "-t", f"{duracion_total:.2f}",
@@ -184,12 +190,20 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
         _ejecutar_cmd(cmd_silencio)
 
     # B) Planificar eventos de SFX a lo largo de la línea de tiempo:
-    #    - Transición/Whoosh + Impacto al cambiar de puesto del Top (#N al #1)
-    #    - Sonido de Typing/Click únicamente cuando aparece un título/subtítulo, con duración corta (~1.2s)
-    #    - SFX específicos del guion (glitch, revelación, impacto)
-    eventos_sfx = []
+    #    - En cada TOP #N: riser 1-2s antes + impact al aparecer la tarjeta .ass + whoosh + teclado
+    #    - En cada transición xfade entre escenas: whoosh sutil sincronizado
+    #    - SFX específicos del guion (glitch, revelación, tensión, ambiente, digital)
+    eventos_sfx: list[tuple[float, Path, float]] = []
     t_acum = 0.0
     puestos_sfx_vistos: set[int] = set()
+
+    top_fx = cfg.get("top_rank_fx", {})
+    top_fx_on = bool(cfg.get("formatos", {}).get("horizontal_16_9", {}).get("top_rank_fx", True) and top_fx.get("enabled", True))
+    riser_lead_s = float(top_fx.get("riser_lead_s", 1.5))
+    riser_vol = float(top_fx.get("riser_volume", 0.65))
+    impact_vol = float(top_fx.get("impact_volume", 0.85))
+    tr_cfg = cfg.get("transiciones", {})
+    whoosh_en_cortes = bool(tr_cfg.get("enabled", True) and tr_cfg.get("sfx_whoosh", True))
 
     for i, esc in enumerate(guion.escenas, 1):
         dur = duraciones.get(esc.id, 5.0)
@@ -200,20 +214,36 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
         es_top = es_inicio_puesto or bool(re.search(r"(?:#|top\s*#?|puesto\s*#?)\s*\d+", txt, re.IGNORECASE))
         es_titulo = es_inicio_puesto or bool(txt)
 
-        # 1. Transición sonora al cambiar de puesto del Top (#N..#1)
         if es_top:
-            sfx_trans = _obtener_sfx("whoosh") or _obtener_sfx("transicion") or _obtener_sfx("impacto")
+            # 1a. Riser de 1-2 s ANTES de aparecer la tarjeta TOP #N
+            if top_fx_on and top_fx.get("riser_enabled", True) and t_acum >= 0.4:
+                sfx_riser = _obtener_sfx("riser")
+                if sfx_riser:
+                    eventos_sfx.append((max(0.0, t_acum - riser_lead_s), sfx_riser, riser_vol))
+
+            # 1b. Impacto profundo exactamente al aparecer la tarjeta TOP #N
+            if top_fx_on and top_fx.get("impact_enabled", True):
+                sfx_imp = _obtener_sfx("impact") or _obtener_sfx("impacto")
+                if sfx_imp:
+                    eventos_sfx.append((t_acum, sfx_imp, impact_vol))
+
+            # 1c. Whoosh de transición
+            sfx_trans = _obtener_sfx("whoosh") or _obtener_sfx("transicion")
             if sfx_trans:
                 eventos_sfx.append((t_acum, sfx_trans, 0.60))
+        elif i > 1 and whoosh_en_cortes:
+            # Whoosh sutil sincronizado con la transición xfade entre escenas normales
+            sfx_whoosh = _obtener_sfx("whoosh") or _obtener_sfx("transicion")
+            if sfx_whoosh:
+                eventos_sfx.append((max(0.0, t_acum - 0.12), sfx_whoosh, 0.35))
 
-        # 2. Sonido de Typing/Click: SOLO cuando se pone título/subtítulo en pantalla y que se corte rápido
+        # 2. Sonido de Typing/Click al aparecer la tarjeta en pantalla
         if es_titulo:
             sfx_teclado = _obtener_sfx("teclado") or _obtener_sfx("click")
             if sfx_teclado:
-                # Entra 150ms después de la transición para sincro perfecta con la tarjeta
-                eventos_sfx.append((t_acum + 0.15, sfx_teclado, 0.85))
+                eventos_sfx.append((t_acum + 0.15, sfx_teclado, 0.80))
 
-        # 3. SFX explícito del guion (impacto, revelación, glitch...)
+        # 3. SFX explícito del guion (impacto, revelación, glitch, tension, ambiente, digital...)
         if esc.sfx and esc.sfx not in ("ninguno", "whoosh", "transicion"):
             sfx_especifico = _obtener_sfx(esc.sfx)
             if sfx_especifico:
@@ -224,19 +254,13 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
     # C) Mezclar música de fondo + todos los SFX programados
     if eventos_sfx:
         inputs = ["-i", str(temp_musica)]
-        filtros_delay = []
-        mix_labels = ["[0:a]"]
-
-        # Mezclar todos los eventos de la línea de tiempo (hasta 40 eventos)
-        # Normalizamos la frecuencia de muestreo de cada SFX a 44.1kHz estéreo para evitar chasquidos, aliasing o silencios
-        filtros_delay.append("[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[bgm_clean]")
+        filtros_delay = ["[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[bgm_clean]"]
         mix_labels = ["[bgm_clean]"]
 
-        for idx, (timestamp_s, ruta_sfx, vol) in enumerate(eventos_sfx[:40], 1):
+        for idx, (timestamp_s, ruta_sfx, vol) in enumerate(eventos_sfx[:55], 1):
             inputs += ["-i", str(ruta_sfx)]
             delay_ms = max(0, int(timestamp_s * 1000))
-            # Ajuste de volumen para que el swoosh y transiciones se escuchen con fuerza y claridad
-            vol_ajustado = min(2.0, vol * 1.6)
+            vol_ajustado = min(2.0, vol * 1.5)
             filtros_delay.append(
                 f"[{idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
                 f"adelay={delay_ms}|{delay_ms},volume={vol_ajustado:.2f}[sfx{idx}]"
@@ -281,17 +305,34 @@ def _buscar_clip_complementario(p: Proyecto, actual: Path) -> Optional[Path]:
     return candidatos[0] if candidatos else None
 
 
-def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp4: Path, es_cierre: bool = False) -> bool:
-    """Renderiza el corte visual en 1080p con Host personalizado.
-    Si el clip dura menos que el audio, encadena un segundo clip distinto en lugar de repetir uno en loop."""
+def renderizar_clip_visual(
+    p: Proyecto,
+    esc: Escena,
+    duracion: float,
+    destino_mp4: Path,
+    es_cierre: bool = False,
+    es_inicio_top: bool = False,
+    cfg: Optional[dict] = None,
+) -> bool:
+    """Renderiza el corte visual en 1080p con:
+    - Grado de color por mood (curves/eq/colorbalance)
+    - Viñeta (vignette=PI/5) + grano ligero FFmpeg (noise=alls=8:allf=t)
+    - Overlay de polvo/grano/glitch en blend=screen (15-25%)
+    - Movimiento Ken Burns (zoompan lento 1.00 a 1.08) en clips estáticos o cortos
+    - Flash + glitch (rgbashift) al iniciar un puesto TOP #N
+    - Host personalizado en capa frontal."""
     ffmpeg = config.ffmpeg_bin("ffmpeg")
+    cfg = cfg or cargar_config_edicion()
+    fmt_cfg = cfg.get("formatos", {}).get("horizontal_16_9", {})
+    kb_cfg = cfg.get("ken_burns", {})
+    usar_kb = bool(fmt_cfg.get("ken_burns", True) and kb_cfg.get("enabled", True))
+
     broll_mp4 = p.ruta("b_roll", f"escena_{esc.id:03d}.mp4")
     broll_jpg = p.ruta("b_roll", f"escena_{esc.id:03d}.jpg")
 
     fondo_es_video = broll_mp4.exists() and es_video_valido(broll_mp4)
     fondo_archivo = broll_mp4 if fondo_es_video else (broll_jpg if broll_jpg.exists() else None)
 
-    # Host personalizado según la pose validada contra el mood y tema (salvo si se desactiva explícitamente)
     sin_host = p.datos.get("sin_host", False)
     host_sprite = (
         obtener_sprite(esc.pose, boca="cerrada", mood=esc.music_mood, tema=p.tema, texto_voz=esc.voz)
@@ -299,13 +340,14 @@ def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp
         else None
     )
 
-    inputs = []
-    filtros = []
+    inputs: list[str] = []
+    filtros: list[str] = []
     num_inputs = 0
 
     if fondo_archivo and fondo_es_video:
         dur_clip = obtener_duracion_video(fondo_archivo)
-        segundo_clip = _buscar_clip_complementario(p, fondo_archivo) if (dur_clip + 0.25 < duracion) else None
+        es_corto = (dur_clip + 0.25 < duracion)
+        segundo_clip = _buscar_clip_complementario(p, fondo_archivo) if es_corto else None
         if segundo_clip:
             inputs += ["-i", str(fondo_archivo), "-stream_loop", "-1", "-i", str(segundo_clip)]
             num_inputs = 2
@@ -317,28 +359,75 @@ def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp
                 "[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
                 "pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30,format=yuv420p[bg1]"
             )
-            filtros.append("[bg0][bg1]concat=n=2:v=1:a=0[bg]")
+            filtros.append("[bg0][bg1]concat=n=2:v=1:a=0[bg_raw]")
         else:
             inputs += ["-stream_loop", "-1", "-i", str(fondo_archivo)]
             num_inputs = 1
-            filtros.append(
-                "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
-                "pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30[bg]"
-            )
+            if usar_kb and kb_cfg.get("aplicar_en_clips_cortos", True) and dur_clip < max(6.0, duracion):
+                kb_expr = construir_filtro_ken_burns(duracion, 1920, 1080, 30, cfg=cfg)
+                filtros.append(f"[0:v]{kb_expr}[bg_raw]")
+            else:
+                filtros.append(
+                    "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                    "pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30[bg_raw]"
+                )
     elif fondo_archivo and not fondo_es_video:
         inputs += ["-loop", "1", "-i", str(fondo_archivo)]
         num_inputs = 1
-        filtros.append("[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30[bg]")
+        if usar_kb and kb_cfg.get("aplicar_en_estaticos", True):
+            kb_expr = construir_filtro_ken_burns(duracion, 1920, 1080, 30, cfg=cfg)
+            filtros.append(f"[0:v]{kb_expr}[bg_raw]")
+        else:
+            filtros.append(
+                "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
+                "pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1,fps=30[bg_raw]"
+            )
     else:
         inputs += ["-f", "lavfi", "-i", "color=c=0x111625:s=1920x1080:r=30"]
         num_inputs = 1
-        filtros.append("[0:v]null[bg]")
+        filtros.append("[0:v]null[bg_raw]")
 
-    v_previo = "[bg]"
+    # Grado de color por mood + viñeta + grano ligero FFmpeg + flash/glitch en apertura de puesto TOP #N
+    filtro_look = construir_filtro_color_textura(
+        mood=esc.music_mood,
+        formato="horizontal_16_9",
+        es_inicio_top=es_inicio_top,
+        cfg=cfg,
+    )
+    filtros.append(f"[bg_raw]{filtro_look}[bg_graded]")
+    v_previo = "[bg_graded]"
+
+    # Overlay de polvo/grano/light_leak/glitch en blend=screen al 15-25% (si está activo y existe asset)
+    ov_cfg = cfg.get("textura_visual", {}).get("video_overlay", {})
+    if fmt_cfg.get("video_overlay", True) and ov_cfg.get("enabled", True):
+        ruta_ov, _ = resolver_overlay_por_mood(
+            mood=esc.music_mood,
+            idx_escena=esc.id,
+            es_inicio_top=es_inicio_top,
+            cfg=cfg,
+            silencioso=False,
+        )
+        if ruta_ov and ruta_ov.exists():
+            ov_idx = num_inputs
+            num_inputs += 1
+            inputs += ["-stream_loop", "-1", "-i", str(ruta_ov)]
+            blend_mode = ov_cfg.get("blend_mode", "screen")
+            opacity = float(ov_cfg.get("opacity", 0.18))
+            filtros.append(
+                f"[{ov_idx}:v]scale=1920:1080:force_original_aspect_ratio=increase,"
+                f"crop=1920:1080,setsar=1,fps=30,format=yuv420p[ov]"
+            )
+            filtros.append(
+                f"{v_previo}[ov]blend=all_mode={blend_mode}:all_opacity={opacity:.2f}:shortest=1,format=yuv420p[bg_ov]"
+            )
+            v_previo = "[bg_ov]"
+
+    # Host personalizado en capa frontal
     if host_sprite and host_sprite.exists():
         tight_sprite = config.ASSETS / "host_tight" / host_sprite.name
         sprite_a_usar = tight_sprite if tight_sprite.exists() else host_sprite
         host_idx = num_inputs
+        num_inputs += 1
         inputs += ["-loop", "1", "-i", str(sprite_a_usar)]
         pos_x = "1920-w-80" if esc.host_lado == "derecha" else "80"
         filtros.append(f"[{host_idx}:v]scale=-1:750[host]")
@@ -378,12 +467,84 @@ def renderizar_clip_visual(p: Proyecto, esc: Escena, duracion: float, destino_mp
     return True
 
 
+def _ensamblar_visual_xfade_o_concat(
+    ffmpeg: str,
+    clips_visuales: list[Path],
+    duraciones_base: list[float],
+    es_top_flags: list[bool],
+    dur_transicion: float,
+    usar_xfade: bool,
+    ruta_ass_escapada: str,
+    temp_clips: Path,
+    video_mudo: Path,
+    cfg: dict,
+) -> bool:
+    """Une los clips visuales aplicando transiciones xfade (fade, fadeblack, smoothleft y glitch en cambios de Top)
+    y quema las tarjetas .ass. Si xfade está desactivado o falla, degrada limpiamente a concat."""
+    clips_existentes = [c for c in clips_visuales if c.exists()]
+    ifusar = usar_xfade and len(clips_existentes) == len(clips_visuales) and 1 < len(clips_existentes) <= 35 and dur_transicion > 0.05
+
+    if ifusar:
+        tr_cfg = cfg.get("transiciones", {})
+        tipos_norm = tr_cfg.get("tipos_normales") or ["fade", "fadeblack", "smoothleft"]
+        inputs: list[str] = []
+        filtros: list[str] = []
+        for idx, c in enumerate(clips_existentes):
+            inputs += ["-i", str(c)]
+            filtros.append(f"[{idx}:v]fps=30,format=yuv420p,settb=AVTB[v{idx}]")
+
+        prev_label = "[v0]"
+        offset_acum = 0.0
+        for idx in range(1, len(clips_existentes)):
+            offset_acum += duraciones_base[idx - 1]
+            # Si la escena que entra inicia un puesto TOP #N, usamos transición glitch/pixelize o fadeblack
+            if es_top_flags[idx]:
+                trans_name = "pixelize" if (idx % 2 == 1) else "fadeblack"
+            else:
+                trans_name = tipos_norm[(idx - 1) % len(tipos_norm)]
+            out_label = f"[vx{idx}]"
+            filtros.append(
+                f"{prev_label}[v{idx}]xfade=transition={trans_name}:duration={dur_transicion:.2f}:offset={offset_acum:.2f}{out_label}"
+            )
+            prev_label = out_label
+
+        filtros.append(f"{prev_label}ass='{ruta_ass_escapada}',format=yuv420p[v_final]")
+        cmd_xfade = [
+            ffmpeg, "-y",
+            *inputs,
+            "-filter_complex", ";".join(filtros),
+            "-map", "[v_final]",
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-an",
+            str(video_mudo),
+        ]
+        if _ejecutar_cmd(cmd_xfade) and video_mudo.exists() and video_mudo.stat().st_size > 1000:
+            return True
+        print("   ⚠️ Aviso: xfade falló o excedió límites -> degradando con elegancia a concat estándar.")
+
+    # Fallback: concat directo
+    lista_v = temp_clips / "concat_v.txt"
+    lista_v.write_text("\n".join([f"file '{c.resolve().as_posix()}'" for c in clips_existentes]), "utf-8")
+    cmd_concat_v = [
+        ffmpeg, "-y", "-f", "concat", "-safe", "0",
+        "-i", str(lista_v),
+        "-vf", f"ass='{ruta_ass_escapada}'",
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        "-an",
+        str(video_mudo),
+    ]
+    return _ejecutar_cmd(cmd_concat_v)
+
+
 def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional[Path] = None) -> dict[str, Path]:
-    """Genera Stems de audio enriquecidos con música/SFX y exporta versión IA y versión Karaoke."""
+    """Genera Stems de audio enriquecidos con música/SFX y exporta versión IA (con sidechain ducking) y versión Karaoke."""
     from .subtitulos import generar_tarjetas_ass
 
     ffmpeg = config.ffmpeg_bin("ffmpeg")
+    cfg = cargar_config_edicion()
+    fmt_cfg = cfg.get("formatos", {}).get("horizontal_16_9", {})
     guion = cargar_guion(p)
+    asegurar_tarjetas_top(guion, top_n=extraer_top_n(p.tema, float(p.datos.get("minutos", 1.0))))
 
     carpeta_renders = p.carpeta / "renders"
     carpeta_renders.mkdir(parents=True, exist_ok=True)
@@ -392,55 +553,105 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
 
     slug = p.datos.get("slug", "video")
 
-    # 1. Stems con Diseño de Sonido Dinámico (Música de fondo + SFX)
-    print("🎧 Generando Stems con Diseño de Sonido (Música documental + SFX clicks/teclado/whoosh)...")
+    # 1. Stems con Diseño de Sonido Dinámico (Música de fondo + Riser + Impact + Whoosh + SFX)
+    print("🎧 Generando Stems con Diseño de Sonido (Música documental + Riser/Impact en TOP #N + SFX)...")
     voz_master, mde_master = crear_stems_audio(p, duraciones, audio_voz_reemplazo=voz_humana)
 
-    # 2. Clips Visuales (B-roll limpio + Host)
+    # 2. Clips Visuales (B-roll con Color Grading + Viñeta + Grano + Overlay Screen + Ken Burns + Host)
     total = len(guion.escenas)
-    print(f"🎬 Renderizando visuales de {total} escenas...")
-    clips_visuales = []
+    usar_xfade = bool(
+        fmt_cfg.get("transiciones_xfade", True)
+        and cfg.get("transiciones", {}).get("enabled", True)
+        and 1 < total <= 35
+    )
+    dur_transicion = float(cfg.get("transiciones", {}).get("duracion_s", 0.35)) if usar_xfade else 0.0
+
+    print(f"🎬 Renderizando visuales de {total} escenas (Color grade por mood, viñeta, grano, overlays y Ken Burns)...")
+    clips_visuales: list[Path] = []
+    duraciones_base: list[float] = []
+    es_top_flags: list[bool] = []
+    puestos_vistos_render: set[int] = set()
+
     for i, esc in enumerate(guion.escenas, 1):
-        dur = duraciones.get(esc.id, 5.0)
-        clip_path = temp_clips / f"vclip_{esc.id:03d}.mp4"
+        dur_base = duraciones.get(esc.id, 5.0)
+        duraciones_base.append(dur_base)
         es_cierre = (i == total)
+        # Añadimos cola de solapamiento (+dur_transicion) para que xfade no acorte el video ni desincronice el audio
+        dur_clip_render = dur_base if es_cierre else (dur_base + dur_transicion)
+
+        txt = (esc.texto_pantalla or "").strip()
+        es_inicio_puesto = bool(esc.puesto and esc.puesto_titulo and esc.puesto not in puestos_vistos_render)
+        if es_inicio_puesto and esc.puesto:
+            puestos_vistos_render.add(esc.puesto)
+        es_top = es_inicio_puesto or bool(re.search(r"(?:#|top\s*#?|puesto\s*#?)\s*\d+", txt, re.IGNORECASE))
+        es_top_flags.append(es_top)
+
+        clip_path = temp_clips / f"vclip_{esc.id:03d}.mp4"
         if not clip_path.exists() or clip_path.stat().st_size < 1000:
-            renderizar_clip_visual(p, esc, dur, clip_path, es_cierre=es_cierre)
+            renderizar_clip_visual(
+                p,
+                esc,
+                dur_clip_render,
+                clip_path,
+                es_cierre=es_cierre,
+                es_inicio_top=es_top,
+                cfg=cfg,
+            )
         clips_visuales.append(clip_path)
 
-    # 3. Generar y Quemar Tarjetas de Puesto del Top (.ass)
-    print("🎨 Generando tarjetas de puesto estilizadas (.ass)...")
+    # 3. Generar Tarjetas .ass y Ensamblar con Transiciones xfade (fade, fadeblack, smoothleft y glitch en TOP #N)
+    print("🎨 Aplicando transiciones xfade y quemando tarjetas estilizadas TOP #N (.ass)...")
     ruta_ass = generar_tarjetas_ass(p, duraciones)
     ruta_ass_escapada = str(ruta_ass.resolve().as_posix()).replace(':', '\\:')
 
-    lista_v = temp_clips / "concat_v.txt"
-    lista_v.write_text("\n".join([f"file '{c.resolve().as_posix()}'" for c in clips_visuales if c.exists()]), "utf-8")
     video_mudo = temp_clips / "visual_completo.mp4"
-    cmd_concat_v = [
-        ffmpeg, "-y", "-f", "concat", "-safe", "0",
-        "-i", str(lista_v),
-        "-vf", f"ass='{ruta_ass_escapada}'",
-        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-        "-an",
-        str(video_mudo)
-    ]
-    _ejecutar_cmd(cmd_concat_v)
+    _ensamblar_visual_xfade_o_concat(
+        ffmpeg=ffmpeg,
+        clips_visuales=clips_visuales,
+        duraciones_base=duraciones_base,
+        es_top_flags=es_top_flags,
+        dur_transicion=dur_transicion,
+        usar_xfade=usar_xfade,
+        ruta_ass_escapada=ruta_ass_escapada,
+        temp_clips=temp_clips,
+        video_mudo=video_mudo,
+        cfg=cfg,
+    )
 
     duracion_total = sum(duraciones.values())
     fade_audio_st = max(0.0, duracion_total - 0.5)
 
-    # 4. Exportar Versión IA (Voz principal + MDE de fondo)
+    # 4. Exportar Versión IA (Voz principal a -16 LUFS + MDE con sidechaincompress ducking)
     video_con_voz = carpeta_renders / f"{slug}_con_voz_ia.mp4"
-    print(f"🎥 Ensamblando Versión IA Dinámica: {video_con_voz.name}...")
+    print(f"🎥 Ensamblando Versión IA Dinámica con Sidechain Ducking: {video_con_voz.name}...")
+    duck_cfg = cfg.get("audio", {}).get("ducking_sidechain", {})
+    usar_ducking = bool(fmt_cfg.get("audio_ducking_sidechain", True) and duck_cfg.get("enabled", True))
+
+    if usar_ducking:
+        thr = float(duck_cfg.get("threshold", 0.035))
+        rat = float(duck_cfg.get("ratio", 5.0))
+        atk = int(duck_cfg.get("attack_ms", 35))
+        rel = int(duck_cfg.get("release_ms", 450))
+        mkp = float(duck_cfg.get("makeup", 1.0))
+        filtro_audio_ia = (
+            f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0,asplit=2[v_aud][v_sc];"
+            f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.95[mde_in];"
+            f"[mde_in][v_sc]sidechaincompress=threshold={thr:.3f}:ratio={rat:.1f}:attack={atk}:release={rel}:makeup={mkp:.1f}[mde_duck];"
+            f"[v_aud][mde_duck]amix=inputs=2:normalize=0,afade=t=out:st={fade_audio_st:.2f}:d=0.5[a_final]"
+        )
+    else:
+        filtro_audio_ia = (
+            f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[v_aud];"
+            f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.85[mde_aud];"
+            f"[v_aud][mde_aud]amix=inputs=2:normalize=0,afade=t=out:st={fade_audio_st:.2f}:d=0.5[a_final]"
+        )
+
     cmd_ia = [
         ffmpeg, "-y",
         "-i", str(video_mudo),
         "-i", str(voz_master),
         "-i", str(mde_master),
-        "-filter_complex",
-        f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[v_aud];"
-        f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.85[mde_aud];"
-        f"[v_aud][mde_aud]amix=inputs=2:normalize=0,afade=t=out:st={fade_audio_st:.2f}:d=0.5[a_final]",
+        "-filter_complex", filtro_audio_ia,
         "-map", "0:v",
         "-map", "[a_final]",
         "-c:v", "copy",
@@ -448,7 +659,20 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
         "-shortest",
         str(video_con_voz)
     ]
-    _ejecutar_cmd(cmd_ia)
+    if not _ejecutar_cmd(cmd_ia):
+        # Fallback sin sidechaincompress si algo fallara
+        cmd_ia_fb = [
+            ffmpeg, "-y",
+            "-i", str(video_mudo),
+            "-i", str(voz_master),
+            "-i", str(mde_master),
+            "-filter_complex",
+            f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[v_aud];"
+            f"[2:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.85[mde_aud];"
+            f"[v_aud][mde_aud]amix=inputs=2:normalize=0,afade=t=out:st={fade_audio_st:.2f}:d=0.5[a_final]",
+            "-map", "0:v", "-map", "[a_final]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", str(video_con_voz)
+        ]
+        _ejecutar_cmd(cmd_ia_fb)
 
     # 5. Exportar Versión Clean / Karaoke (Música y SFX sin locución)
     video_sin_voz = carpeta_renders / f"{slug}_sin_voz.mp4"

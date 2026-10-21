@@ -11,14 +11,15 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from src import config
+from src.edicion import cargar_config_edicion
 from src.estado import Proyecto
 
 
 class EscenaTikTok(BaseModel):
     id: int
-    voz: str = Field(description="Narración ultrarrápida (5 a 12 palabras)")
+    voz: str = Field(description="Narración ultrarrápida para corte de 2 a 3 segundos (5 a 9 palabras máximo)")
     broll_query_en: str = Field(description="Búsqueda para clips reales de redes sociales, noticias de archivo, entrevistas o metraje viral en YouTube/TikTok (ej: 'diddy court hearing footage news', 'diddy mansion fbi raid abc')")
-    texto_destacado: str = Field(description="1 a 3 palabras clave en mayúsculas para subtítulo gigante")
+    texto_destacado: str = Field(description="1 a 2 palabras clave en MAYÚSCULAS para zoom punch y resalte karaoke")
     pose_host: str = Field(default="sorprendido", description="sorprendido, senalando, pensativo, explicando, esceptico, duda, aprobando")
     sfx: str = Field(default="whoosh", description="whoosh, impacto, tension, revelacion, glitch, teclado, ninguno")
 
@@ -30,14 +31,14 @@ class GuionTikTok(BaseModel):
     escenas: list[EscenaTikTok]
 
 
-PROMPT_TIKTOK = """Crea un GUION VERTICAL PARA TIKTOK / SHORTS DE ALTA RETENCIÓN (Duración exacta: {segundos} segundos).
+PROMPT_TIKTOK = """Crea un GUION VERTICAL PARA TIKTOK / SHORTS / REELS DE ALTA RETENCIÓN (Duración exacta: {segundos} segundos).
 
-ESTRUCTURA PSICOLÓGICA DE TIKTOK:
+ESTRUCTURA PSICOLÓGICA DE REELS 9:16 (CORTES RÁPIDOS DE 2-3 SEGUNDOS):
 1. SEGUNDO 0-2 (EL HOOK): La primera frase DEBE ser una pregunta paradójica, un secreto prohibido o un hecho impactante que impida hacer scroll.
-2. RITMO VERTIGINOSO: Divide el video en {num_escenas} micro-escenas de 2 a 3 segundos cada una (cada escena tiene entre 6 y 14 palabras).
-3. BUCLE Y CIERRE COMPLETO: La última escena DEBE ser una frase u oración COMPLETA y contundente (una pregunta de remate que invite a debatir en comentarios). NUNCA dejes oraciones inconclusas ni cortes con puntos suspensivos (ej: NO pongas 'Y la gran pregunta es...'). Debe ser un remate sólido que además conecte temáticamente con el inicio.
-4. TEXTO DESTACADO: 1 a 3 palabras contundentes por escena en mayúsculas para quemar en el centro de la pantalla.
-5. CLIPS REALES DE REDES EN `broll_query_en`: NUNCA uses conceptos abstractos genéricos (como 'prison' o 'money'). Usa términos precisos en inglés para encontrar metraje REAL en YouTube / TikTok / noticias de archivo sobre los personajes y eventos reales del tema (ej: 'diddy combs arrested footage news', 'sean combs miami raid helicopter abc', 'diddy white party celebrity guests video', 'diddy courtroom trial news').
+2. CORTES ULTRARRÁPIDOS (2 A 3 SEGUNDOS): Divide el video en {num_escenas} micro-escenas de 2 a 3 segundos cada una (cada escena debe tener estrictamente entre 5 y 9 palabras).
+3. BUCLE Y CIERRE COMPLETO: La última escena DEBE ser una frase u oración COMPLETA y contundente (una pregunta de remate que invite a debatir en comentarios). NUNCA dejes oraciones inconclusas ni cortes con puntos suspensivos.
+4. TEXTO DESTACADO (KEYWORD): 1 a 2 palabras clave por escena en MAYÚSCULAS que coincidan con palabras de `voz` para activar el zoom punch y el resalte karaoke palabra por palabra.
+5. CLIPS REALES DE REDES EN `broll_query_en`: NUNCA uses conceptos abstractos genéricos. Usa términos precisos en inglés (3-5 palabras) para encontrar metraje visual concreto y oscuro.
 
 TEMA:
 {tema}
@@ -50,7 +51,10 @@ def _cliente() -> genai.Client:
 
 def generar_guion_tiktok(p: Proyecto, segundos: int = 30) -> GuionTikTok:
     client = _cliente()
-    num_escenas = max(7, round(segundos / 3.0))
+    cfg = cargar_config_edicion()
+    c_cfg = cfg.get("reels_9_16", {}).get("cortes_rapidos", {})
+    dur_media_corte = (float(c_cfg.get("min_s", 2.0)) + float(c_cfg.get("max_s", 3.0))) / 2.0
+    num_escenas = max(8, int(round(segundos / max(1.8, dur_media_corte))))
     prompt = PROMPT_TIKTOK.format(segundos=segundos, num_escenas=num_escenas, tema=p.tema)
 
     modelos = [config.MODELO_ESTRUCTURA, "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.8-flash"]
