@@ -36,17 +36,19 @@ color_grading:
   enabled: true
   moods:
     misterio:
-      # Frío y desaturado (look documental investigativo oscuro)
-      saturation: 0.72
-      contrast: 1.12
-      brightness: -0.03
-      colorbalance: "rs=-0.08:gs=-0.02:bs=0.14:rm=-0.05:gm=0.00:bm=0.08"
+      # Frío sutil sin tinte morado/magenta, menos desaturación y sombras preservadas con curves
+      saturation: 0.88
+      contrast: 1.05
+      brightness: 0.00
+      colorbalance: "rs=-0.02:gs=0.01:bs=0.03:rm=-0.01:gm=0.01:bm=0.02"
+      curves: "master='0/0.02 0.18/0.19 0.50/0.51 0.85/0.86 1/1'"
     tension:
-      # Contraste agresivo frío con sombras densas
-      saturation: 0.68
-      contrast: 1.18
-      brightness: -0.04
-      colorbalance: "rs=-0.08:gs=0.03:bs=0.12:rm=-0.04:gm=0.02:bm=0.06"
+      # Contraste frío controlado conservando detalle en sombras
+      saturation: 0.82
+      contrast: 1.10
+      brightness: -0.01
+      colorbalance: "rs=-0.03:gs=0.01:bs=0.05:rm=-0.02:gm=0.01:bm=0.03"
+      curves: "master='0/0.01 0.20/0.20 0.50/0.51 0.85/0.86 1/1'"
     epica:
       # Contraste cálido cinematográfico (dorado / ámbar en altas luces)
       saturation: 1.12
@@ -111,6 +113,11 @@ top_rank_fx:
   rgbashift_rh: -6
   rgbashift_bh: 6
   flash_brightness: 0.12
+  card_delay_post_glitch_s: 0.35  # La tarjeta TOP #N aparece 0.35s después del glitch/pixelize
+  card_duracion_s: 3.5
+  card_font_size_top: 184         # ~2x más grande y legible (antes 90pt)
+  card_font_size_titulo: 116      # ~2x más grande (antes 62pt)
+  card_back_colour: "&H58000000"  # Fondo semitransparente oscuro (~65% opacidad)
 
 audio:
   ducking_sidechain:

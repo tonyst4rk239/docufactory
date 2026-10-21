@@ -52,16 +52,18 @@ DEFAULT_EDICION_CONFIG: dict[str, Any] = {
         "enabled": True,
         "moods": {
             "misterio": {
-                "saturation": 0.72,
-                "contrast": 1.12,
-                "brightness": -0.03,
-                "colorbalance": "rs=-0.08:gs=-0.02:bs=0.14:rm=-0.05:gm=0.00:bm=0.08",
+                "saturation": 0.88,
+                "contrast": 1.05,
+                "brightness": 0.00,
+                "colorbalance": "rs=-0.02:gs=0.01:bs=0.03:rm=-0.01:gm=0.01:bm=0.02",
+                "curves": "master='0/0.02 0.18/0.19 0.50/0.51 0.85/0.86 1/1'",
             },
             "tension": {
-                "saturation": 0.68,
-                "contrast": 1.18,
-                "brightness": -0.04,
-                "colorbalance": "rs=-0.08:gs=0.03:bs=0.12:rm=-0.04:gm=0.02:bm=0.06",
+                "saturation": 0.82,
+                "contrast": 1.10,
+                "brightness": -0.01,
+                "colorbalance": "rs=-0.03:gs=0.01:bs=0.05:rm=-0.02:gm=0.01:bm=0.03",
+                "curves": "master='0/0.01 0.20/0.20 0.50/0.51 0.85/0.86 1/1'",
             },
             "epica": {
                 "saturation": 1.12,
@@ -125,6 +127,11 @@ DEFAULT_EDICION_CONFIG: dict[str, Any] = {
         "rgbashift_rh": -6,
         "rgbashift_bh": 6,
         "flash_brightness": 0.12,
+        "card_delay_post_glitch_s": 0.35,
+        "card_duracion_s": 3.5,
+        "card_font_size_top": 184,
+        "card_font_size_titulo": 116,
+        "card_back_colour": "&H58000000",
     },
     "audio": {
         "ducking_sidechain": {
@@ -241,18 +248,21 @@ def construir_filtro_color_textura(
     fmt_cfg = cfg.get("formatos", {}).get(formato, {})
     partes: list[str] = []
 
-    # 1. Grado de color por mood (eq + colorbalance)
+    # 1. Grado de color por mood (eq + colorbalance + curves para preservar sombras)
     cg_cfg = cfg.get("color_grading", {})
     if fmt_cfg.get("color_grading", True) and cg_cfg.get("enabled", True):
         moods_map = cg_cfg.get("moods", {})
         m_cfg = moods_map.get(mood) or moods_map.get("misterio") or {}
-        sat = float(m_cfg.get("saturation", 0.80))
-        con = float(m_cfg.get("contrast", 1.10))
-        bri = float(m_cfg.get("brightness", -0.02))
+        sat = float(m_cfg.get("saturation", 0.88))
+        con = float(m_cfg.get("contrast", 1.05))
+        bri = float(m_cfg.get("brightness", 0.00))
         partes.append(f"eq=saturation={sat:.2f}:contrast={con:.2f}:brightness={bri:.2f}")
         cb = (m_cfg.get("colorbalance") or "").strip()
         if cb:
             partes.append(f"colorbalance={cb}")
+        curves_expr = (m_cfg.get("curves") or "").strip()
+        if curves_expr:
+            partes.append(f"curves={curves_expr}")
 
     # 2. Flash + Glitch (rgbashift) al inicio de cada puesto TOP #N
     top_fx = cfg.get("top_rank_fx", {})
