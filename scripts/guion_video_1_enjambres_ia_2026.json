@@ -1,0 +1,89 @@
+{
+  "titulo": "Top 5 Armas Autonomas y Enjambres de IA que ya Operan sin Control Humano (2026)",
+  "duracion_estimada": "7:15",
+  "tono": "Misterio inquietante, documental de investigacion profunda",
+  "estilo": "100% Documental de Archivo con B-roll cinematografico y efectos de sonido inmersivos",
+  "secciones": [
+    {
+      "tipo": "intro",
+      "titulo_seccion": "Introduccion: La Linea Roja Cruzada",
+      "duracion": "0:45",
+      "narracion": "Durante decadas, los tratados internacionales y las peliculas de ciencia ficcion nos advirtieron sobre una frontera que jamas debiamos cruzar: permitir que una maquina tomara, por si sola, la decision de quitar una vida humana. Hoy, en pleno 2026, esa advertencia ya es cosa del pasado. Lejos de los reflectores publicos y bajo el secreto de estado de las mayores potencias militares, los algoritmos han tomado el mando del campo de batalla. Ya no hay soldados al otro lado de la mira. Solo sensores termicos, reconocimiento biometrico y lineas de codigo calculando objetivos a la velocidad de la luz. Bienvenidos a Codigo Oculto TV. Hoy exploramos el Top 5 de tecnologias belicas y enjambres de inteligencia artificial que rompieron el control humano... y que ya estan operando en este preciso momento.",
+      "broll_sugerido": [
+        "cielo nocturno con drones",
+        "sensores termicos militares en primera persona",
+        "servidores con luces parpadeantes en bases subterraneas"
+      ]
+    },
+    {
+      "tipo": "top_5",
+      "puesto": 5,
+      "nombre": "Top 5: Proyecto Meridian y los Sabuesos de Acero Autonomos",
+      "duracion": "1:10",
+      "narracion": "Comenzamos en el puesto numero cinco con una de las desclasificaciones mas perturbadoras del Pentagono: el Proyecto Meridian. Durante anos, los robots cuadrúpedos eran vistos como prototipos experimentales para transporte de carga o exploracion de terrenos hostiles. Sin embargo, los reportes militares de este ano revelan la incorporacion de armamento cinetico y vision por computadora totalmente autonoma en patrullajes perimetrales. Lo inquietante no es su blindaje ni su velocidad, sino su logica de actuacion: si el sistema pierde enlace satelital o conexion con su base, un protocolo interno toma el control absoluto del arma, ejecutando patrones de aniquilacion en un radio de accion predeterminado sin necesidad de confirmacion de un operador de carne y hueso.",
+      "broll_sugerido": [
+        "robot cuadrúpedo militar corriendo en bosque nocturno",
+        "interfaz HUD con objetivo fijado en rojo",
+        "desclasificacion de documentos militares"
+      ]
+    },
+    {
+      "tipo": "top_4",
+      "puesto": 4,
+      "nombre": "Top 4: Kargu-2 y el Primer Ataque Registrado sin Orden Humana",
+      "duracion": "1:15",
+      "narracion": "En el puesto cuatro nos adentramos en el antecedente real documentado por la propia ONU que cambio las reglas de la guerra para siempre: el dron suicida Kargu-2. Disenado como un cuadricoptero ligero cargado de explosivos, este dispositivo integra algoritmos de aprendizaje profundo entrenados para reconocer siluetas humanas y vehiculos militares. En informes oficiales de conflicto, se confirmo el primer evento en la historia donde un enjambre de estas maquinas persiguio, acorralo y neutralizo a combatientes en retirada de forma 100% automatica, mientras los operadores a kilometros de distancia solo presenciaban el resultado en sus pantallas satelitales. La caja negra de su algoritmo sigue siendo un misterio indescifrable.",
+      "broll_sugerido": [
+        "drones Kargu volando a baja altura",
+        "camara en primera persona de dron en picada",
+        "pantallas de radar militar"
+      ]
+    },
+    {
+      "tipo": "top_3",
+      "puesto": 3,
+      "nombre": "Top 3: Enjambres de Microdrones en Red Neuronal Distribuida",
+      "duracion": "1:20",
+      "narracion": "En el puesto numero tres llegamos a la tecnologia mas letal y economica jamas creada: los enjambres coordinados por mente colmena artificial. A diferencia de un dron solitario que puede ser derribado con facilidad, estas nubes compuestas por cientos de microdrones actuan como un solo organismo biologico. Si una onda electromagnetica neutraliza a diez de ellos, los restantes redistribuyen la tarea entre si en cuestion de milisegundos mediante enlaces de radio cifrados. Su tamano reducido les permite colarse por ventilaciones, ventanas o grietas estrechas, mapeando interiores en tres dimensiones y eliminando blancos especificos mediante reconocimiento facial instantaneo en menos de tres segundos.",
+      "broll_sugerido": [
+        "cientos de drones sincronizados volando como bandada de pajaros",
+        "escaneo 3D LIDAR de edificios en azul neon",
+        "soldados mirando al cielo con impotencia"
+      ]
+    },
+    {
+      "tipo": "top_2",
+      "puesto": 2,
+      "nombre": "Top 2: El Algoritmo Lavender y la Seleccion Automatica de Blancos",
+      "duracion": "1:20",
+      "narracion": "Llegamos al puesto dos con una de las realidades mas frias y controvertidas de los conflictos recientes: los sistemas de inteligencia artificial para generacion masiva de objetivos, como el polemico software Lavender. En lugar de analistas militares pasando semanas verificando fuentes humanas y fotos de satelite, este algoritmo procesa terabytes de datos de telecomunicaciones, mensajeria y ubicaciones GPS, asignando a cada ciudadano un puntaje del uno al cien sobre la probabilidad de pertenecer a una red hostil. Cuando el algoritmo supera un umbral de sospecha, el objetivo entra automaticamente en la lista de ataques con drones, reduciendo la decision sobre una vida humana a un simple calculo de probabilidad estadistica.",
+      "broll_sugerido": [
+        "cascada de datos digitales en terminal negra",
+        "mapas de calor por satelite de ciudades",
+        "pantallas de analisis de inteligencia militar"
+      ]
+    },
+    {
+      "tipo": "top_1",
+      "puesto": 1,
+      "nombre": "Top 1: El Proyecto 'Día Q' y la Guerra Silenciosa de los Cables Submarinos",
+      "duracion": "1:25",
+      "narracion": "Y en el puesto numero uno encontramos la mayor amenaza a la seguridad global en este preciso instante de 2026: la carrera encubierta hacia el Dia Q combinada con sumergibles autonomos. El noventa y nueve por ciento de todo el trafico de internet del planeta, incluyendo transferencias bancarias, codigos de defensa y secretos de estado, viaja a traves de cables de fibra optica tendidos en el fondo de los oceanos. En las ultimas semanas, buques de rescate han reportado la presencia de vehiculos submarinos no tripulados que operan a miles de metros de profundidad, interviniendo estos cables y almacenando petabytes de informacion cifrada. Una vez que las computadoras cuanticas alcancen la capacidad de descifrado, todo lo que hoy consideramos seguro caera en un instante. Una guerra invisible librandose en el abismo mientras el mundo duerme.",
+      "broll_sugerido": [
+        "submarino autonomo descendiendo en el fondo del oceano",
+        "cables de fibra optica en el lecho marino con luces de transmision",
+        "pantallas de alerta de ciberseguridad global"
+      ]
+    },
+    {
+      "tipo": "outro",
+      "titulo_seccion": "Conclusion y Cierre",
+      "duracion": "0:45",
+      "narracion": "La verdadera pregunta ya no es si las maquinas algun dia se rebelaran contra la humanidad. La realidad es que los propios humanos les hemos entregado las armas, las ordenes y el poder de decidir. Y cuando el codigo se ejecuta a la velocidad de la luz, el margen para el arrepentimiento simplemente no existe. Si este reporte te parecio revelador, no olvides suscribirte a Codigo Oculto TV y activar la campana para no perderte nuestras proximas investigaciones sobre el lado oscuro de la tecnologia y los secretos del mundo digital. Dejanos en los comentarios: ¿crees que la humanidad aun tiene tiempo de detener esta carrera armamentista? Hasta el proximo episodio.",
+      "broll_sugerido": [
+        "pantalla parpadeando a negro con logo de Codigo Oculto TV",
+        "boton de suscripcion con sonido de campana de fondo"
+      ]
+    }
+  ]
+}

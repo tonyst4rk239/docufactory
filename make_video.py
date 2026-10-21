@@ -54,6 +54,9 @@ def cmd_nuevo(args) -> int:
     from src.guion import etapa_guion
 
     p = Proyecto.crear(args.tema, args.minutos, args.lang)
+    if getattr(args, "sin_host", False):
+        p.datos["sin_host"] = True
+        p.guardar()
     print(f"📁 Proyecto inicializado en: {p.carpeta}")
     avisos = etapa_guion(p)
     for a in avisos:
@@ -76,13 +79,16 @@ def cmd_continuar(args) -> int:
     from src.publicacion import etapa_publicacion
 
     p = Proyecto.cargar(args.slug)
+    if getattr(args, "sin_host", False):
+        p.datos["sin_host"] = True
+        p.guardar()
     print(f"\n🚀 Procesando proyecto: '{p.tema}' ({p.datos['slug']})\n")
 
     # 1. Voz IA Masterizada
     duraciones = etapa_voz(p)
 
     # 2. B-Roll
-    etapa_broll(p)
+    etapa_broll(p, duraciones)
 
     # 3. Subtítulos
     generar_srt(p, duraciones)
@@ -158,10 +164,12 @@ def main() -> int:
     n.add_argument("tema")
     n.add_argument("--minutos", type=float, default=1.0)
     n.add_argument("--lang", default="es")
+    n.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
     n.set_defaults(fn=cmd_nuevo)
 
     c = sub.add_parser("continuar")
     c.add_argument("slug")
+    c.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
     c.set_defaults(fn=cmd_continuar)
 
     d = sub.add_parser("doblar")
@@ -173,6 +181,7 @@ def main() -> int:
     a.add_argument("tema")
     a.add_argument("--minutos", type=float, default=1.0)
     a.add_argument("--lang", default="es")
+    a.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
     a.set_defaults(fn=cmd_auto)
 
     s = sub.add_parser("estado")

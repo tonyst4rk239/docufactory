@@ -1,7 +1,9 @@
-"""Generador de pistas de subtítulos (.srt) a partir del guion y duraciones de voz."""
+"""Generador de pistas de subtítulos (.srt) y tarjetas de puesto estilizadas (.ass)."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from . import config
 from .estado import Proyecto
 from .guion import cargar_guion
 
@@ -12,6 +14,18 @@ def _formatear_tiempo_srt(segundos: float) -> str:
     s = int(segundos % 60)
     ms = int((segundos - int(segundos)) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _formatear_tiempo_ass(segundos: float) -> str:
+    """Formatea segundos en formato H:MM:SS.cs para subtítulos ASS."""
+    h = int(segundos // 3600)
+    m = int((segundos % 3600) // 60)
+    s = int(segundos % 60)
+    cs = int(round((segundos - int(segundos)) * 100))
+    if cs >= 100:
+        cs = 0
+        s += 1
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
 def generar_srt(p: Proyecto, duraciones: dict[int, float]) -> Path:
@@ -37,3 +51,75 @@ def generar_srt(p: Proyecto, duraciones: dict[int, float]) -> Path:
         
     ruta_srt.write_text("\n".join(lineas), "utf-8")
     return ruta_srt
+
+
+def generar_tarjetas_ass(p: Proyecto, duraciones: dict[int, float]) -> Path:
+    """Genera archivo de subtítulos estilizados .ass para tarjetas de puesto del Top."""
+    guion = cargar_guion(p)
+    carpeta_renders = p.carpeta / "renders"
+    carpeta_renders.mkdir(parents=True, exist_ok=True)
+    ruta_ass = carpeta_renders / "tarjetas_puestos.ass"
+
+    # Estilo ASS: Tamaño grande 92pt, Centrado al centro de la pantalla (Alignment=5), con fondo oscuro opaco y borde cian/amarillo
+    contenido_base = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: TopCentered,Arial Black,92,&H00FFFFFF,&H00000000,&H00000000,&HD0000000,1,0,0,0,100,100,2.5,0,3,18,12,5,80,80,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"""
+
+    eventos = []
+    tiempo_actual = 0.0
+    primer_top_visto = False
+
+    for esc in guion.escenas:
+        dur = duraciones.get(esc.id, 5.0)
+        t_inicio = tiempo_actual
+        t_fin = tiempo_actual + dur
+        tiempo_actual = t_fin
+
+        txt = (esc.texto_pantalla or "").strip()
+        if not txt:
+            continue
+
+        # Duración de la tarjeta: 3.5 segundos exactos para que se lea y se quite rápido
+        t_evento_fin = min(t_fin, t_inicio + 3.5)
+        ini_str = _formatear_tiempo_ass(t_inicio)
+        fin_str = _formatear_tiempo_ass(t_evento_fin)
+
+        m = re.search(r"#\s*(\d+)[:\s]*(.*)", txt)
+        if m:
+            numero = m.group(1)
+            titulo = m.group(2).strip()
+            
+            # Si es el primer título del top que aparece, lo hacemos más grande e impactante
+            if not primer_top_visto:
+                primer_top_visto = True
+                if titulo:
+                    texto_formateado = f"{{\\fs115}}{{\\c&H0000E6FF&}}TOP #{numero}\\N{{\\c&H00FFFFFF&}}{{\\fs76}}{titulo}"
+                else:
+                    texto_formateado = f"{{\\fs120}}{{\\c&H0000E6FF&}}TOP #{numero}"
+            else:
+                if titulo:
+                    texto_formateado = f"{{\\fs90}}{{\\c&H0000E6FF&}}TOP #{numero}\\N{{\\c&H00FFFFFF&}}{{\\fs62}}{titulo}"
+                else:
+                    texto_formateado = f"{{\\fs95}}{{\\c&H0000E6FF&}}TOP #{numero}"
+        else:
+            # Título general / Intro
+            if not primer_top_visto:
+                texto_formateado = f"{{\\fs105}}{{\\c&H0000E6FF&}}{txt}"
+            else:
+                texto_formateado = f"{{\\fs90}}{{\\c&H0000E6FF&}}{txt}"
+
+        eventos.append(
+            f"Dialogue: 1,{ini_str},{fin_str},TopCentered,,0,0,0,,{{\\fad(250,250)}}{texto_formateado}"
+        )
+
+    contenido_final = contenido_base + "\n" + "\n".join(eventos) + "\n"
+    ruta_ass.write_text(contenido_final, encoding="utf-8")
+    return ruta_ass

@@ -48,7 +48,10 @@ class Guion(BaseModel):
 def _cliente() -> genai.Client:
     if not config.GEMINI_API_KEY:
         raise RuntimeError("Falta GEMINI_API_KEY en .env")
-    return genai.Client(api_key=config.GEMINI_API_KEY)
+    return genai.Client(
+        api_key=config.GEMINI_API_KEY,
+        http_options=types.HttpOptions(client_args={"verify": False}),
+    )
 
 
 # ------------------------------------------------------------------ paso A
@@ -95,17 +98,19 @@ def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
         print(f"⚠️ Aviso: Grounding no disponible ({e}). Generando con conocimiento interno...")
 
     # Intento 2: Fallback con modelos disponibles
-    modelos_candidatos = [config.MODELO_GUION, "gemini-3.1-flash-lite"]
+    modelos_candidatos = [config.MODELO_GUION, "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.8-flash"]
     for mod in modelos_candidatos:
-        try:
-            resp = client.models.generate_content(
-                model=mod,
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.7),
-            )
-            return resp.text or "", [{"titulo": "Investigación Curada Gemini AI", "url": "https://ai.google.dev"}]
-        except Exception:
-            time.sleep(2)
+        for intento in range(2):
+            try:
+                resp = client.models.generate_content(
+                    model=mod,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(temperature=0.7),
+                )
+                return resp.text or "", [{"titulo": "Investigación Curada Gemini AI", "url": "https://ai.google.dev"}]
+            except Exception as e:
+                print(f"⚠️ Reintento {intento+1}/2 con {mod} en investigación: {e}")
+                time.sleep(2)
 
     raise RuntimeError("No fue posible generar el guion tras varios intentos.")
 
@@ -124,7 +129,7 @@ REGLAS ESTRICTAS DE FORMATO TOP:
   * Durante las explicaciones técnicas: 'explicando' o 'pensativo'.
   * En la intro/cierre: 'neutro' o 'riendo'.
 - host_visible: true al anunciar cada puesto (#X) y en la conclusión; pon host_visible = false cuando se deba ver el clip a pantalla completa.
-- broll_query_en: términos precisos en inglés para buscar clips reales en YouTube (ej: "deepfake video glitch demo", "quantum chip processor macro").
+- broll_query_en: IMPORTANTE: incluye términos específicos y precisos en inglés para descargar clips REALES de archivo, noticias, entrevistas, celebridades y juicios (ej: "Sean Diddy Combs court hearing press conference", "Diddy mansion raid footage news", "celebrities red carpet party Sean Combs").
 - sfx: pon 'whoosh' o 'transicion' al entrar a un nuevo puesto (#X); pon 'ninguno' en el resto.
 
 MATERIAL:
@@ -141,25 +146,29 @@ def estructurar(material: str, minutos: float) -> Guion:
         max_pal=config.MAX_PALABRAS_ESCENA, material=material,
     )
     prompt += f"\n\nATENCIÓN OBLIGATORIA: El video debe durar {minutos} minutos exactos. Debes generar AL MENOS {n_escenas} escenas en total (aproximadamente {max(3, n_escenas // 5)} escenas detalladas por cada puesto del Top). NO RESUMAS en pocas escenas."
-    for mod in [config.MODELO_ESTRUCTURA, "gemini-3.1-flash-lite"]:
-        try:
-            resp = client.models.generate_content(
-                model=mod,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=Guion,
-                    temperature=0.4,
-                ),
-            )
-            if resp.parsed is not None:
-                return resp.parsed
-            return Guion.model_validate_json(resp.text)
-        except Exception as e:
-            print(f"⚠️ Error estructurando con {mod} ({e}). Reintentando...")
-            time.sleep(2)
+    client = _cliente()
+    # Lista de modelos de respaldo para evitar fallos por 503 (alta demanda)
+    modelos_candidatos = [config.MODELO_ESTRUCTURA, "gemini-flash-lite-latest", "gemini-3.1-flash-lite", "gemini-3.8-flash"]
+    for mod in modelos_candidatos:
+        for intento in range(3):
+            try:
+                resp = client.models.generate_content(
+                    model=mod,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=Guion,
+                        temperature=0.4,
+                    ),
+                )
+                if resp.parsed is not None:
+                    return resp.parsed
+                return Guion.model_validate_json(resp.text)
+            except Exception as e:
+                print(f"⚠️ Reintento {intento+1}/3 con modelo {mod} tras aviso: {e}")
+                time.sleep(3)
 
-    raise RuntimeError("No se pudo estructurar el guion.")
+    raise RuntimeError("No se pudo estructurar el guion tras múltiples intentos.")
 
 
 # ------------------------------------------------------------------ salida
@@ -205,6 +214,10 @@ def etapa_guion(p: Proyecto) -> list[str]:
 
     print(f"🧱 Estructurando en escenas con {config.MODELO_ESTRUCTURA}…")
     g = estructurar(material, minutos)
+
+    if p.datos.get("sin_host", False):
+        for e in g.escenas:
+            e.host_visible = False
 
     p.ruta("guion", "guion.json").write_text(json.dumps(g.model_dump(), ensure_ascii=False, indent=2), "utf-8")
     p.ruta("guion", "guion_montaje.txt").write_text(_montaje_txt(p, g), "utf-8")

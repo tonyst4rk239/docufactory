@@ -1,0 +1,79 @@
+[
+  {
+    "index": 0,
+    "name": "intro",
+    "audio": "sec_0_intro.mp3",
+    "title": "CÓDIGO OCULTO TV: EL FIN DEL CONTROL HUMANO",
+    "clips": [
+      "cyber_matrix_data.mp4",
+      "military_satellite_hud.mp4",
+      "slaughterbots_microdrones.mp4"
+    ]
+  },
+  {
+    "index": 1,
+    "name": "top_5",
+    "audio": "sec_1_top_5.mp3",
+    "title": "TOP 5: PROYECTO MERIDIAN Y SABUESOS DE ACERO",
+    "clips": [
+      "spot_robot.mp4",
+      "military_satellite_hud.mp4",
+      "spot_robot.mp4"
+    ]
+  },
+  {
+    "index": 2,
+    "name": "top_4",
+    "audio": "sec_2_top_4.mp3",
+    "title": "TOP 4: KARGU-2 (PRIMER ATAQUE 100% AUTÓNOMO)",
+    "clips": [
+      "kargu2_drone.mp4",
+      "cyber_matrix_data.mp4",
+      "kargu2_drone.mp4"
+    ]
+  },
+  {
+    "index": 3,
+    "name": "top_3",
+    "audio": "sec_3_top_3.mp3",
+    "title": "TOP 3: ENJAMBRES DE MICRODRONES Y MENTE COLMENA",
+    "clips": [
+      "slaughterbots_microdrones.mp4",
+      "drone_swarm_china.mp4",
+      "slaughterbots_microdrones.mp4"
+    ]
+  },
+  {
+    "index": 4,
+    "name": "top_2",
+    "audio": "sec_4_top_2.mp3",
+    "title": "TOP 2: ALGORITMO LAVENDER (SELECCIÓN POR IA)",
+    "clips": [
+      "lavender_ai_target.mp4",
+      "military_satellite_hud.mp4",
+      "cyber_matrix_data.mp4"
+    ]
+  },
+  {
+    "index": 5,
+    "name": "top_1",
+    "audio": "sec_5_top_1.mp3",
+    "title": "TOP 1: EL DÍA Q Y LA GUERRA DE CABLES SUBMARINOS",
+    "clips": [
+      "cables_submarinos.mp4",
+      "ocean_underwater_clean.mp4",
+      "quantum_computer_ibm.mp4"
+    ]
+  },
+  {
+    "index": 6,
+    "name": "outro",
+    "audio": "sec_6_outro.mp3",
+    "title": "SUSCRÍBETE A CÓDIGO OCULTO TV",
+    "clips": [
+      "cyber_matrix_data.mp4",
+      "military_satellite_hud.mp4",
+      "drone_swarm_china.mp4"
+    ]
+  }
+]

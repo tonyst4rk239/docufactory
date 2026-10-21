@@ -1,0 +1,12 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+; Estilo para Banner superior: Blanco puro (#FFFFFF en BGR: &H00FFFFFF), Borde negro 6px, Sombra 5px, Centrado arriba
+Style: TopHeader,Arial Black,82,&H00FFFFFF,&H00000000,&H00000000,&H90000000,1,0,0,0,100,100,2.5,0,1,6,5,8,40,40,75,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

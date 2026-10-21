@@ -35,14 +35,18 @@ def preparar_texto_con_pausas(texto: str) -> str:
     return t
 
 
-def normalizar_audio_ffmpeg(origen_audio: Path, destino_wav: Path) -> None:
-    """Aplica filtro loudnorm (-16 LUFS, TP=-1.5 dB, LRA=11) y highpass=f=80."""
+def normalizar_audio_ffmpeg(origen_audio: Path, destino_wav: Path, pad_inicio_s: float = 0.0) -> None:
+    """Aplica filtro loudnorm (-16 LUFS, TP=-1.5 dB, LRA=11) y highpass=f=80, con opción de pre-roll silence."""
     ffmpeg = config.ffmpeg_bin("ffmpeg")
-    filtro_audio = "highpass=f=80,loudnorm=I=-16:TP=-1.5:LRA=11"
+    filtros = ["highpass=f=80"]
+    if pad_inicio_s > 0:
+        delay_ms = int(pad_inicio_s * 1000)
+        filtros.append(f"adelay={delay_ms}|{delay_ms}")
+    filtros.append("loudnorm=I=-16:TP=-1.5:LRA=11")
     cmd = [
         ffmpeg, "-y",
         "-i", str(origen_audio),
-        "-af", filtro_audio,
+        "-af", ",".join(filtros),
         "-ar", "24000",
         "-ac", "1",
         "-c:a", "pcm_s16le",
@@ -57,13 +61,13 @@ async def _sintetizar_edge_tts(texto: str, destino_mp3: Path, voz: str = VOZ_DEF
     await comm.save(str(destino_mp3))
 
 
-def sintetizar_y_masterizar_escena(texto: str, destino_wav: Path) -> float:
+def sintetizar_y_masterizar_escena(texto: str, destino_wav: Path, pad_inicio_s: float = 0.0) -> float:
     """Sintetiza la escena con modulación y aplica masterizado con loudnorm."""
     texto_modulado = preparar_texto_con_pausas(texto)
     temp_raw_mp3 = destino_wav.with_suffix(".raw.mp3")
     try:
         asyncio.run(_sintetizar_edge_tts(texto_modulado, temp_raw_mp3))
-        normalizar_audio_ffmpeg(temp_raw_mp3, destino_wav)
+        normalizar_audio_ffmpeg(temp_raw_mp3, destino_wav, pad_inicio_s=pad_inicio_s)
         if temp_raw_mp3.exists():
             temp_raw_mp3.unlink()
         return obtener_duracion_wav(destino_wav)
@@ -94,6 +98,7 @@ def etapa_voz(p: Proyecto, regenerar: bool = False) -> dict[int, float]:
 
     for i, escena in enumerate(guion.escenas, 1):
         archivo_wav = carpeta_voz / f"escena_{escena.id:03d}.wav"
+        pad = 0.45 if i == 1 else 0.0
 
         if archivo_wav.exists() and not regenerar:
             dur = obtener_duracion_wav(archivo_wav)
@@ -102,7 +107,7 @@ def etapa_voz(p: Proyecto, regenerar: bool = False) -> dict[int, float]:
             continue
 
         try:
-            dur = sintetizar_y_masterizar_escena(escena.voz, archivo_wav)
+            dur = sintetizar_y_masterizar_escena(escena.voz, archivo_wav, pad_inicio_s=pad)
             duraciones[escena.id] = dur
             print(f"   [{i}/{total_escenas}] Escena {escena.id}: {dur}s (Masterizado) -> {archivo_wav.name}")
         except Exception as e:
