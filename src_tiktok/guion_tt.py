@@ -4,31 +4,98 @@ Enfocado en retención extrema: Hook de 2 segundos, ritmo acelerado y bucle infi
 from __future__ import annotations
 
 import json
+import re
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src import config
 from src.edicion import cargar_config_edicion
 from src.estado import Proyecto
+from src.guion import (
+    Guion,
+    _contar_palabras_habladas,
+    _guion_doblaje_md,
+    _montaje_txt,
+    validar_json_externo,
+)
+from src.host_anim import es_mood_oscuro_sin_dinero, normalizar_pose
+
+
+def _extraer_keyword_automatica(voz: str) -> str:
+    limpio = re.sub(r"<[^>]+>", " ", voz or "")
+    palabras = re.findall(r"[a-zA-ZáéíóúñÁÉÍÓÚÑ]{4,}", limpio)
+    if not palabras:
+        return "SECRETO"
+    palabras_ordenadas = sorted(palabras, key=len, reverse=True)
+    return palabras_ordenadas[0].upper()
 
 
 class EscenaTikTok(BaseModel):
     id: int
-    voz: str = Field(description="Narración ultrarrápida para corte de 2 a 3 segundos (5 a 9 palabras máximo)")
-    broll_query_en: str = Field(description="Búsqueda para clips reales de redes sociales, noticias de archivo, entrevistas o metraje viral en YouTube/TikTok (ej: 'diddy court hearing footage news', 'diddy mansion fbi raid abc')")
-    texto_destacado: str = Field(description="1 a 2 palabras clave en MAYÚSCULAS para zoom punch y resalte karaoke")
+    voz: str = Field(description="Narración ultrarrápida para corte de 2 a 3 segundos (admite pausas SSML)")
+    broll_query_en: str = Field(default="", description="Búsqueda principal en inglés para B-roll")
+    broll_queries_en: list[str] = Field(default_factory=list, description="2 a 3 consultas en inglés para B-roll")
+    broll_mood_keywords: list[str] = Field(default_factory=list, description="Palabras de mood en inglés")
+    broll_avoid_keywords: list[str] = Field(default_factory=list, description="Términos a evitar en inglés")
+    texto_destacado: str = Field(default="", description="1 a 2 palabras clave en MAYÚSCULAS para zoom punch y resalte karaoke")
     pose_host: str = Field(default="sorprendido", description="sorprendido, senalando, pensativo, explicando, esceptico, duda, aprobando")
-    sfx: str = Field(default="whoosh", description="whoosh, impacto, tension, revelacion, glitch, teclado, ninguno")
+    sfx: str = Field(default="whoosh", description="whoosh, impacto, riser, tension, revelacion, glitch, digital, click, ninguno")
+    music_mood: str = Field(default="misterio", description="misterio, tension, epica, curiosidad, calma")
+    puesto: Optional[int] = Field(default=None)
+    puesto_titulo: Optional[str] = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_escena_tt(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        for alias_voz in ("narracion", "texto_narracion", "texto"):
+            if alias_voz in d and not d.get("voz"):
+                d["voz"] = d[alias_voz]
+        if "pose" in d and not d.get("pose_host"):
+            d["pose_host"] = d["pose"]
+        if "musica" in d and not d.get("music_mood"):
+            d["music_mood"] = d["musica"]
+        queries = d.get("broll_queries_en")
+        q_single = (d.get("broll_query_en") or "").strip()
+        if isinstance(queries, list) and queries:
+            limpias = [str(q).strip() for q in queries if str(q).strip()]
+            d["broll_queries_en"] = limpias
+            if not q_single and limpias:
+                d["broll_query_en"] = limpias[0]
+        elif q_single:
+            d["broll_queries_en"] = [q_single]
+        if not d.get("texto_destacado"):
+            d["texto_destacado"] = _extraer_keyword_automatica(str(d.get("voz") or ""))
+        return d
 
 
 class GuionTikTok(BaseModel):
     titulo: str
-    hook: str
-    bucle_loop_frase: str
+    mood: str = "misterio"
+    hook: str = ""
+    bucle_loop_frase: str = ""
     escenas: list[EscenaTikTok]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_guion_tt(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("titulo") and d.get("titulo_trabajo"):
+            d["titulo"] = d["titulo_trabajo"]
+        escenas = d.get("escenas") or []
+        if not d.get("hook") and escenas and isinstance(escenas[0], dict):
+            d["hook"] = str(escenas[0].get("voz") or escenas[0].get("narracion") or "")
+        if not d.get("bucle_loop_frase") and escenas and isinstance(escenas[-1], dict):
+            d["bucle_loop_frase"] = str(escenas[-1].get("voz") or escenas[-1].get("narracion") or "")
+        return d
 
 
 PROMPT_TIKTOK = """Crea un GUION VERTICAL PARA TIKTOK / SHORTS / REELS DE ALTA RETENCIÓN (Duración exacta: {segundos} segundos).
@@ -46,7 +113,90 @@ TEMA:
 
 
 def _cliente() -> genai.Client:
+    if not config.GEMINI_API_KEY:
+        raise RuntimeError("Falta GEMINI_API_KEY en .env")
     return genai.Client(api_key=config.GEMINI_API_KEY)
+
+
+def guion_general_a_tiktok(g: Guion) -> GuionTikTok:
+    """Convierte un objeto Guion unificado en GuionTikTok preservando queries, mood y poses validadas."""
+    escenas_tt: list[EscenaTikTok] = []
+    mood_ref = g.mood_original or g.mood or "misterio"
+    for e in g.escenas:
+        pose_limpia = normalizar_pose(
+            e.pose,
+            mood=mood_ref if es_mood_oscuro_sin_dinero(mood=mood_ref) else e.music_mood,
+            tema=g.titulo_trabajo,
+            texto_voz=e.voz,
+        )
+        kw = e.texto_destacado or e.puesto_titulo or _extraer_keyword_automatica(e.voz)
+        escenas_tt.append(
+            EscenaTikTok(
+                id=e.id,
+                voz=e.voz,
+                broll_query_en=e.broll_query_en or (e.broll_queries_en[0] if e.broll_queries_en else ""),
+                broll_queries_en=list(e.broll_queries_en or ([e.broll_query_en] if e.broll_query_en else [])),
+                broll_mood_keywords=list(e.broll_mood_keywords),
+                broll_avoid_keywords=list(e.broll_avoid_keywords),
+                texto_destacado=kw,
+                pose_host=pose_limpia,
+                sfx=e.sfx if e.sfx != "ninguno" else "whoosh",
+                music_mood=e.music_mood,
+                puesto=e.puesto,
+                puesto_titulo=e.puesto_titulo,
+            )
+        )
+    hook = g.hook or (escenas_tt[0].voz if escenas_tt else g.titulo_trabajo)
+    bucle = g.bucle_loop_frase or (escenas_tt[-1].voz if escenas_tt else "")
+    return GuionTikTok(
+        titulo=g.titulo_trabajo,
+        mood=g.mood,
+        hook=hook,
+        bucle_loop_frase=bucle,
+        escenas=escenas_tt,
+    )
+
+
+def importar_guion_tiktok(
+    ruta_json: Path,
+    reusar: bool = False,
+) -> tuple[Proyecto, GuionTikTok, list[str]]:
+    """Valida e importa un archivo JSON de guion para formato vertical 9:16 (Reels/TikTok)."""
+    guion_obj, errores, avisos = validar_json_externo(ruta_json, formato_esperado="9:16")
+    if errores or guion_obj is None:
+        detalle = "\n".join(f"  ❌ [{e}]" for e in errores)
+        raise ValueError(f"El archivo '{ruta_json}' contiene errores de validación:\n{detalle}")
+
+    guion_obj.formato = "9:16"
+    palabras_tot = sum(_contar_palabras_habladas(e.voz) for e in guion_obj.escenas)
+    minutos_calc = guion_obj.minutos or round(max(0.25, palabras_tot / 165.0), 2)
+    guion_obj.minutos = minutos_calc
+
+    try:
+        p = Proyecto.crear(guion_obj.titulo_trabajo, minutos=minutos_calc, lang="es", reusar=reusar)
+    except TypeError:
+        p = Proyecto.crear(guion_obj.titulo_trabajo, minutos=minutos_calc, lang="es")
+    p.datos["formato"] = "9:16"
+    p.datos["mood"] = guion_obj.mood
+    p.datos["mood_original"] = guion_obj.mood_original
+    p.datos["guion_origen"] = str(ruta_json.resolve())
+
+    if hasattr(p, "invalidar_cache_si_guion_cambio"):
+        p.invalidar_cache_si_guion_cambio(guion_obj.escenas)
+
+    guion_tt = guion_general_a_tiktok(guion_obj)
+    p_guion = p.ruta("guion")
+    p_guion.mkdir(parents=True, exist_ok=True)
+    (p_guion / "guion_tiktok.json").write_text(
+        json.dumps(guion_tt.model_dump(), ensure_ascii=False, indent=2), "utf-8"
+    )
+    (p_guion / "guion.json").write_text(
+        json.dumps(guion_obj.model_dump(), ensure_ascii=False, indent=2), "utf-8"
+    )
+    (p_guion / "guion_montaje.txt").write_text(_montaje_txt(p, guion_obj), "utf-8")
+    (p_guion / "guion_doblaje.md").write_text(_guion_doblaje_md(p, guion_obj), "utf-8")
+    p.marcar("guion", "revisar")
+    return p, guion_tt, avisos
 
 
 def generar_guion_tiktok(p: Proyecto, segundos: int = 30) -> GuionTikTok:
@@ -72,7 +222,10 @@ def generar_guion_tiktok(p: Proyecto, segundos: int = 30) -> GuionTikTok:
                 )
                 if resp.parsed:
                     guion = resp.parsed
-                    # Guardar en proyecto
+                    for esc in guion.escenas:
+                        esc.pose_host = normalizar_pose(esc.pose_host, mood=guion.mood, tema=p.tema, texto_voz=esc.voz)
+                    if hasattr(p, "invalidar_cache_si_guion_cambio"):
+                        p.invalidar_cache_si_guion_cambio(guion.escenas)
                     p_guion = p.ruta("guion")
                     p_guion.mkdir(parents=True, exist_ok=True)
                     (p_guion / "guion_tiktok.json").write_text(guion.model_dump_json(indent=2), "utf-8")

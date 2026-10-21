@@ -1,12 +1,13 @@
 """Docu Factory — CLI principal con orquestación completa y doblaje humano.
 
 Uso:
-  python make_video.py doctor                          # verifica entorno y claves
-  python make_video.py nuevo "tema" [--minutos 1.0]    # crea guion y guía de doblaje para teleprompter
-  python make_video.py continuar <slug>                # corre voz, broll, stems y renders duales
-  python make_video.py auto "tema" [--minutos 1.0]     # pipeline continuo sin pausas
-  python make_video.py doblar <slug> --audio <wav>     # re-sincroniza con locución humana
-  python make_video.py estado <slug>                   # ver progreso del proyecto
+  python make_video.py doctor                                  # verifica entorno, claves y assets
+  python make_video.py importar <guion.json> [--auto]          # importa guion externo (Pluma), valida y produce
+  python make_video.py nuevo "tema" [--minutos 1.0]            # crea guion con Gemini (opcional) y guía de doblaje
+  python make_video.py continuar <slug>                        # corre voz, broll, stems y renders duales
+  python make_video.py auto "tema" [--minutos 1.0]             # pipeline continuo sin pausas
+  python make_video.py doblar <slug> --audio <wav>             # re-sincroniza con locución humana
+  python make_video.py estado <slug>                           # ver progreso del proyecto
 """
 from __future__ import annotations
 
@@ -32,14 +33,14 @@ def cmd_doctor(_args) -> int:
         ok &= bool(ruta)
 
     print("\n== Claves, APIs y Cookies (.env) ==")
-    for nombre, req in [
-        ("GEMINI_API_KEY", True),
-        ("PIXABAY_API_KEY", True),
-        ("PEXELS_API_KEY", False),
-        ("FREESOUND_API_KEY", False),
+    for nombre, req, nota_opc in [
+        ("GEMINI_API_KEY", False, f"opcional: usa 'importar <guion.json>' o respaldo {config.MODELO_GUION}"),
+        ("PIXABAY_API_KEY", True, "requerida para B-roll y overlays"),
+        ("PEXELS_API_KEY", False, "opcional / recomendada para B-roll con licencia segura"),
+        ("FREESOUND_API_KEY", False, "opcional / SFX CC0"),
     ]:
         val = getattr(config, nombre)
-        marca = "✅" if val else ("❌" if req else "➖ (opcional / fallback activo)")
+        marca = "✅" if val else ("❌" if req else f"➖ ({nota_opc})")
         print(f"  {marca} {nombre}")
         ok &= bool(val) or not req
 
@@ -142,13 +143,63 @@ def cmd_doctor(_args) -> int:
     return 0 if ok else 1
 
 
+def cmd_importar(args) -> int:
+    from src.guion import importar_guion_archivo
+
+    ruta_json = Path(args.guion_json)
+    print(f"📥 Validando e importando guion externo: {ruta_json}")
+    try:
+        p, guion_obj, avisos = importar_guion_archivo(
+            ruta_json,
+            formato_forzado="16:9",
+            sin_host=getattr(args, "sin_host", False),
+            reusar=getattr(args, "reusar", False),
+        )
+    except ValueError as e:
+        print(f"\n❌ Error de validación en el guion JSON:\n{e}")
+        return 1
+    except Exception as e:
+        print(f"\n❌ No se pudo importar el guion '{ruta_json}': {e}")
+        return 1
+
+    print(f"📁 Proyecto inicializado en: {p.carpeta} (slug: {p.datos['slug']})")
+    print(f"✅ Guion validado: '{guion_obj.titulo_trabajo}' ({len(guion_obj.escenas)} escenas, TOP {guion_obj.top_n or '-'})")
+    for a in avisos:
+        print(f"  ⚠️  {a}")
+    print(
+        "\n📖 Archivos generados:\n"
+        f"   • Guía para Teleprompter / Doblaje: {p.ruta('guion', 'guion_doblaje.md')}\n"
+        f"   • Lectura rápida de montaje:        {p.ruta('guion', 'guion_montaje.txt')}\n"
+        f"   • Estructura técnica de escenas:   {p.ruta('guion', 'guion.json')}"
+    )
+
+    if getattr(args, "solo_guion", False):
+        print(f"\n⏸️  Modo --solo-guion activo. Para continuar: python make_video.py continuar {p.datos['slug']}")
+        return 0
+
+    args.slug = p.datos["slug"]
+    return cmd_continuar(args)
+
+
 def cmd_nuevo(args) -> int:
     from src.guion import etapa_guion
 
-    p = Proyecto.crear(args.tema, args.minutos, args.lang)
+    if not config.GEMINI_API_KEY:
+        print(
+            "⚠️  GEMINI_API_KEY no está configurada (Gemini es opcional en v3).\n"
+            "👉 Para crear y producir un proyecto desde un archivo de guion externo (Pluma), usa:\n"
+            "   python make_video.py importar <guion.json> [--auto]"
+        )
+        return 1
+
+    try:
+        p = Proyecto.crear(args.tema, args.minutos, args.lang, reusar=getattr(args, "reusar", False))
+    except TypeError:
+        p = Proyecto.crear(args.tema, args.minutos, args.lang)
     if getattr(args, "sin_host", False):
         p.datos["sin_host"] = True
         p.guardar()
+    args._ultimo_slug = p.datos["slug"]
     print(f"📁 Proyecto inicializado en: {p.carpeta}")
     avisos = etapa_guion(p)
     for a in avisos:
@@ -231,9 +282,17 @@ def cmd_doblar(args) -> int:
 
 
 def cmd_auto(args) -> int:
-    cmd_nuevo(args)
-    slug = config.slugify(args.tema)
-    args.slug = slug
+    posible_json = Path(args.tema)
+    if posible_json.suffix.lower() == ".json" and posible_json.exists():
+        args.guion_json = str(posible_json)
+        args.auto = True
+        args.solo_guion = False
+        return cmd_importar(args)
+
+    rc = cmd_nuevo(args)
+    if rc != 0:
+        return rc
+    args.slug = getattr(args, "_ultimo_slug", None) or config.slugify(args.tema)
     return cmd_continuar(args)
 
 
@@ -252,10 +311,19 @@ def main() -> int:
 
     sub.add_parser("doctor").set_defaults(fn=cmd_doctor)
 
+    imp = sub.add_parser("importar", help="Valida e importa un guion JSON externo (Pluma) y ejecuta el pipeline")
+    imp.add_argument("guion_json", help="Ruta al archivo .json del guion")
+    imp.add_argument("--auto", action="store_true", help="Ejecuta todo el pipeline de corrido (voz, broll y render)")
+    imp.add_argument("--solo-guion", action="store_true", help="Solo valida el JSON y genera guion_doblaje.md sin renderizar")
+    imp.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
+    imp.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
+    imp.set_defaults(fn=cmd_importar)
+
     n = sub.add_parser("nuevo")
     n.add_argument("tema")
     n.add_argument("--minutos", type=float, default=1.0)
     n.add_argument("--lang", default="es")
+    n.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
     n.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
     n.set_defaults(fn=cmd_nuevo)
 
@@ -273,6 +341,7 @@ def main() -> int:
     a.add_argument("tema")
     a.add_argument("--minutos", type=float, default=1.0)
     a.add_argument("--lang", default="es")
+    a.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
     a.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
     a.set_defaults(fn=cmd_auto)
 

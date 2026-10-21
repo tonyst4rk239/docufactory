@@ -43,9 +43,9 @@ def _resolver_cookies() -> Path | None:
 # Ruta a cookies.txt para yt-dlp (None si no se configuró)
 YTDLP_COOKIES: Path | None = _resolver_cookies()
 
-# --- Modelos ---
-MODELO_GUION = os.getenv("MODELO_GUION", "gemini-2.5-pro")
-MODELO_ESTRUCTURA = os.getenv("MODELO_ESTRUCTURA", "gemini-2.5-pro")
+# --- Modelos (solo usados si se invoca Gemini como respaldo opcional) ---
+MODELO_GUION = os.getenv("MODELO_GUION", "gemini-3.1-pro-preview")
+MODELO_ESTRUCTURA = os.getenv("MODELO_ESTRUCTURA", "gemini-3.1-pro-preview")
 MODELO_JUEZ = os.getenv("MODELO_JUEZ", "gemini-2.5-flash")
 MODELO_IMAGEN = os.getenv("MODELO_IMAGEN", "gemini-2.5-flash-image")
 

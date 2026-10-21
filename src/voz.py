@@ -25,12 +25,37 @@ from .guion import cargar_guion, Guion, Escena
 VOZ_DEFAULT = "es-US-AlonsoNeural"
 
 
+def limpiar_tags_ssml(texto: str) -> str:
+    """Elimina etiquetas SSML (<break .../>, <emphasis>, etc.) dejando el texto limpio."""
+    t = re.sub(r"<[^>]+>", " ", texto or "")
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _reemplazar_break_ssml(match: re.Match) -> str:
+    attr = match.group(1) or ""
+    m_ms = re.search(r"(\d+(?:\.\d+)?)\s*ms", attr, re.IGNORECASE)
+    m_s = re.search(r"(\d+(?:\.\d+)?)\s*s\b", attr, re.IGNORECASE)
+    ms = 400.0
+    if m_ms:
+        ms = float(m_ms.group(1))
+    elif m_s:
+        ms = float(m_s.group(1)) * 1000.0
+    if ms >= 650:
+        return "... ... "
+    if ms >= 300:
+        return "... "
+    return ", "
+
+
 def preparar_texto_con_pausas(texto: str) -> str:
-    """Prepara el texto inyectando puntuación y pausas de ritmo documental."""
+    """Prepara el texto convirtiendo etiquetas SSML <break/> e inyectando pausas de ritmo documental."""
+    t = re.sub(r"<\s*(?:break|pause)\b([^>]*)/?\s*>", _reemplazar_break_ssml, texto or "", flags=re.IGNORECASE)
+    t = re.sub(r"<[^>]+>", " ", t)
     # Asegurar espacios limpios tras signos de puntuación
-    t = re.sub(r"\s+", " ", texto).strip()
+    t = re.sub(r"\s+", " ", t).strip()
     # Puntos suspensivos para dar respiro reflexivo en puntos seguidos
     t = t.replace(". ", "... ")
+    t = re.sub(r"(?:\.\.\.\s*){2,}", "... ", t)
     t = t.replace(", ", ", ")
     return t
 
@@ -118,7 +143,7 @@ def etapa_voz(p: Proyecto, regenerar: bool = False) -> dict[int, float]:
     objetivo_s = round(minutos_pedidos * 60.0, 2)
     desviacion_s = round(duracion_total - objetivo_s, 2)
     desviacion_pct = round((desviacion_s / objetivo_s) * 100.0, 1) if objetivo_s > 0 else 0.0
-    total_palabras = sum(len(e.voz.split()) for e in guion.escenas)
+    total_palabras = sum(len(limpiar_tags_ssml(e.voz).split()) for e in guion.escenas)
     wpm_efectivo = round(total_palabras / (duracion_total / 60.0), 1) if duracion_total > 0 else 0.0
     margen_s = max(6.0, objetivo_s * config.TOLERANCIA_DURACION)
     dentro_rango = abs(desviacion_s) <= margen_s

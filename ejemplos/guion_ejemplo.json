@@ -1,0 +1,210 @@
+{
+  "titulo": "Top 3 misterios sin resolver más inquietantes de la historia",
+  "formato": "16:9",
+  "mood": "misterio",
+  "top_n": 3,
+  "minutos": 1.0,
+  "resumen": "Tres expedientes históricos documentados donde la ciencia y la investigación forense jamás encontraron una explicación definitiva.",
+  "youtube_metadata": {
+    "titulos": [
+      "3 Misterios Reales Que La Ciencia Jamás Pudo Explicar",
+      "Los 3 Casos Sin Resolver Más Inquietantes De La Historia",
+      "Nadie Sabe Qué Pasó Aquí: Top 3 Misterios Históricos"
+    ],
+    "descripcion": "A lo largo de la historia existen expedientes oficiales donde todas las pruebas físicas contradicen la lógica. En este documental analizamos los 3 misterios sin resolver más inquietantes jamás registrados.\n\nDesde manuscritos cifrados en lenguas imposibles hasta señales del espacio profundo y expediciones perdidas en la nieve, descubre por qué estos casos siguen abiertos hoy.",
+    "tags": [
+      "misterios sin resolver",
+      "documental misterio",
+      "top 3 misterios",
+      "manuscrito voynich",
+      "señal wow",
+      "paso dyatlov",
+      "historia oscura",
+      "casos inexplicables"
+    ]
+  },
+  "capitulos": [
+    {
+      "escena_id": 1,
+      "titulo": "Introducción: Expedientes sin explicación",
+      "timestamp": "00:00"
+    },
+    {
+      "escena_id": 2,
+      "titulo": "Puesto #3: El Códice Indescifrable",
+      "timestamp": "00:08"
+    },
+    {
+      "escena_id": 4,
+      "titulo": "Puesto #2: La Transmisión del Espacio Profundo",
+      "timestamp": "00:24"
+    },
+    {
+      "escena_id": 6,
+      "titulo": "Puesto #1: El Incidente de los Montes Urales",
+      "timestamp": "00:40"
+    }
+  ],
+  "escenas": [
+    {
+      "id": 1,
+      "acto": "gancho",
+      "puesto": null,
+      "puesto_titulo": null,
+      "voz": "Existen archivos oficiales donde cada pista descubierta solo vuelve el caso más oscuro. <break time=\"400ms\"/> Hoy veremos tres misterios que siguen sin respuesta.",
+      "pose": "pensativo",
+      "host_visible": true,
+      "host_lado": "izquierda",
+      "broll_queries_en": [
+        "dark archive room cabinets night",
+        "classified dossier folders flashlight",
+        "dark hallway shadows mystery"
+      ],
+      "broll_mood_keywords": ["dark", "cinematic", "mysterious", "shadows"],
+      "broll_avoid_keywords": ["happy", "sunny", "beach", "cartoon", "office party"],
+      "broll_descripcion": "Pasillo oscuro de archivos confidenciales iluminado con luz tenue.",
+      "music_mood": "misterio",
+      "sfx": "ambiente"
+    },
+    {
+      "id": 2,
+      "acto": "conflicto",
+      "puesto": 3,
+      "puesto_titulo": "EL MANUSCRITO VOYNICH",
+      "voz": "Puesto número tres: el Manuscrito Voynich. <break time=\"350ms\"/> Un libro ilustrado del siglo quince escrito en un alfabeto completamente desconocido.",
+      "pose": "senalando",
+      "host_visible": true,
+      "host_lado": "izquierda",
+      "broll_queries_en": [
+        "ancient manuscript parchment candle",
+        "old leather book library dark",
+        "medieval calligraphy pages closeup"
+      ],
+      "broll_mood_keywords": ["ancient", "dark", "historical", "candlelight"],
+      "broll_avoid_keywords": ["beach", "sunny", "vacation", "tablet", "modern"],
+      "broll_descripcion": "Primer plano de un manuscrito antiguo sobre mesa de madera a la luz de una vela.",
+      "music_mood": "misterio",
+      "sfx": "whoosh"
+    },
+    {
+      "id": 3,
+      "acto": "profundizacion",
+      "puesto": 3,
+      "puesto_titulo": null,
+      "voz": "Sus páginas muestran plantas que no existen en la Tierra <break time=\"300ms\"/> y ni los mejores criptógrafos militares lograron traducir una sola palabra.",
+      "pose": "esceptico",
+      "host_visible": false,
+      "host_lado": "izquierda",
+      "broll_queries_en": [
+        "old botanical drawing antique paper",
+        "magnifying glass old book dark",
+        "dusty library shelves night"
+      ],
+      "broll_mood_keywords": ["vintage", "dark", "mysterious", "macro"],
+      "broll_avoid_keywords": ["greenhouse", "bright", "garden", "happy", "flowers"],
+      "broll_descripcion": "Lupa recorriendo ilustraciones antiguas y símbolos incomprensibles.",
+      "music_mood": "misterio",
+      "sfx": "ninguno"
+    },
+    {
+      "id": 4,
+      "acto": "conflicto",
+      "puesto": 2,
+      "puesto_titulo": "LA SEÑAL WOW DE 1977",
+      "voz": "En el puesto número dos está la Señal Wow. <break time=\"400ms\"/> Una transmisión de radio captada desde la constelación de Sagitario en mil novecientos setenta y siete.",
+      "pose": "sorprendido",
+      "host_visible": true,
+      "host_lado": "derecha",
+      "broll_queries_en": [
+        "radio telescope dish night sky",
+        "deep space stars nebula dark",
+        "observatory antenna night timelapse"
+      ],
+      "broll_mood_keywords": ["night", "space", "dark", "cinematic"],
+      "broll_avoid_keywords": ["daylight", "cartoon", "alien costume", "funny"],
+      "broll_descripcion": "Radiotelescopio apuntando al cielo nocturno estrellado.",
+      "music_mood": "tension",
+      "sfx": "whoosh"
+    },
+    {
+      "id": 5,
+      "acto": "profundizacion",
+      "puesto": 2,
+      "puesto_titulo": null,
+      "voz": "Duró exactamente setenta y dos segundos en la frecuencia del hidrógeno <break time=\"350ms\"/> y jamás volvió a repetirse en medio siglo de búsqueda.",
+      "pose": "duda",
+      "host_visible": false,
+      "host_lado": "derecha",
+      "broll_queries_en": [
+        "oscilloscope signal wave dark screen",
+        "control room monitors night",
+        "galaxy stars deep cosmos"
+      ],
+      "broll_mood_keywords": ["dark", "electronic", "screen", "night"],
+      "broll_avoid_keywords": ["dj", "concert", "party", "club", "music"],
+      "broll_descripcion": "Monitor de ondas de radio mostrando un pico de señal en una sala oscura.",
+      "music_mood": "tension",
+      "sfx": "digital"
+    },
+    {
+      "id": 6,
+      "acto": "giro",
+      "puesto": 1,
+      "puesto_titulo": "EL PASO DYATLOV",
+      "voz": "Y en el puesto número uno: el incidente del Paso Dyatlov. <break time=\"450ms\"/> Nueve excursionistas rasgaron su tienda desde adentro en medio de la noche siberiana.",
+      "pose": "sorprendido",
+      "host_visible": true,
+      "host_lado": "izquierda",
+      "broll_queries_en": [
+        "blizzard snow mountain night storm",
+        "abandoned tent snow winter dark",
+        "frozen forest wind night"
+      ],
+      "broll_mood_keywords": ["cold", "dark", "storm", "winter"],
+      "broll_avoid_keywords": ["ski resort", "sunny", "holiday", "family", "happy"],
+      "broll_descripcion": "Tormenta de nieve nocturna azotando una montaña solitaria.",
+      "music_mood": "tension",
+      "sfx": "impacto"
+    },
+    {
+      "id": 7,
+      "acto": "resolucion",
+      "puesto": 1,
+      "puesto_titulo": null,
+      "voz": "Huyeron descalzos a treinta grados bajo cero <break time=\"350ms\"/> y los forenses hallaron rastros de radiación que ningún informe pudo explicar del todo.",
+      "pose": "pensativo",
+      "host_visible": false,
+      "host_lado": "izquierda",
+      "broll_queries_en": [
+        "footprints snow night forest",
+        "dark pine forest winter fog",
+        "cold mist mountain twilight"
+      ],
+      "broll_mood_keywords": ["fog", "dark", "winter", "eerie"],
+      "broll_avoid_keywords": ["christmas", "lights", "cheerful", "sunny", "dog"],
+      "broll_descripcion": "Huellas perdiéndose en la nieve dentro de un bosque oscuro con niebla.",
+      "music_mood": "misterio",
+      "sfx": "tension"
+    },
+    {
+      "id": 8,
+      "acto": "cta",
+      "puesto": null,
+      "puesto_titulo": null,
+      "voz": "¿Cuál de estos tres expedientes crees que oculta la verdad más inquietante? <break time=\"300ms\"/> Déjalo en los comentarios y suscríbete.",
+      "pose": "explicando",
+      "host_visible": true,
+      "host_lado": "izquierda",
+      "broll_queries_en": [
+        "dark hallway door closing shadow",
+        "old archive lamp turning off",
+        "night fog cinematic street"
+      ],
+      "broll_mood_keywords": ["dark", "cinematic", "shadows", "night"],
+      "broll_avoid_keywords": ["sunny", "happy", "daylight", "party"],
+      "broll_descripcion": "Luz apagándose lentamente sobre los archivos del caso.",
+      "music_mood": "misterio",
+      "sfx": "ninguno"
+    }
+  ]
+}

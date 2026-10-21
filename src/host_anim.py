@@ -35,27 +35,46 @@ _PALABRAS_FINANZAS = {
 }
 
 
+_MOODS_SIN_DINERO = {
+    "misterio", "terror", "crimen", "tension", "tensión", "horror", "paranormal", "suspenso"
+}
+
+
+def es_mood_oscuro_sin_dinero(mood: str = "", tema: str = "", texto_voz: str = "") -> bool:
+    """Indica si el mood o tema pertenece a misterio/terror/crimen/tensión donde la pose 'dinero' está prohibida."""
+    m_norm = (mood or "").strip().lower().translate(str.maketrans("áéíóú", "aeiou"))
+    if m_norm in _MOODS_SIN_DINERO:
+        return True
+    contexto_tokens = set(re.findall(r"[a-záéíóúñ]+", f"{tema} {texto_voz}".lower()))
+    contexto_limpio = {t.translate(str.maketrans("áéíóú", "aeiou")) for t in contexto_tokens}
+    return bool(contexto_limpio & _PALABRAS_MISTERIO_TERROR)
+
+
 def normalizar_pose(pose: str, mood: str = "misterio", tema: str = "", texto_voz: str = "") -> str:
     """Resuelve alias heredados y valida que la pose sea coherente con el mood y el tema.
-    Prohíbe tajantemente 'dinero' en temas/moods de misterio o terror."""
+    Prohíbe tajantemente 'dinero' en temas/moods de misterio, terror, crimen o tensión."""
     p = (pose or "").strip().lower()
     p = config.POSE_ALIASES.get(p, p)
     if p not in config.POSES:
         p = "explicando"
 
+    m_norm = (mood or "misterio").strip().lower().translate(str.maketrans("áéíóú", "aeiou"))
+    mood_canonico = "tension" if m_norm in ("terror", "crimen", "tension", "suspenso") else m_norm
+    if mood_canonico not in config.POSES_POR_MOOD:
+        mood_canonico = "misterio"
+
     contexto_tokens = set(re.findall(r"[a-záéíóúñ]+", f"{tema} {texto_voz}".lower()))
-    # Quitar tildes para comparación simple
     contexto_limpio = {
         t.translate(str.maketrans("áéíóú", "aeiou")) for t in contexto_tokens
     }
-    es_tema_misterio = (mood in ("misterio", "tension")) or bool(contexto_limpio & _PALABRAS_MISTERIO_TERROR)
+    es_tema_misterio = es_mood_oscuro_sin_dinero(mood=mood, tema=tema, texto_voz=texto_voz)
     es_contexto_finanzas = bool(contexto_limpio & _PALABRAS_FINANZAS)
 
     if p == "dinero":
         if es_tema_misterio or not es_contexto_finanzas:
-            return "sorprendido" if mood in ("misterio", "tension") else "senalando"
+            return "sorprendido" if mood_canonico in ("misterio", "tension") else "senalando"
 
-    permitidas = config.POSES_POR_MOOD.get(mood, config.POSES)
+    permitidas = config.POSES_POR_MOOD.get(mood_canonico, config.POSES)
     if p not in permitidas and not (p == "dinero" and es_contexto_finanzas and not es_tema_misterio):
         reemplazos = {
             "aprobando": "explicando",

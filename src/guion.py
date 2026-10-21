@@ -8,35 +8,117 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Literal, Optional
+from pathlib import Path
+from typing import Any, Literal, Optional
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from . import config
 from .estado import Proyecto
-from .host_anim import normalizar_pose
+from .host_anim import es_mood_oscuro_sin_dinero, normalizar_pose
 
 Pose = Literal[
     "explicando", "pensativo", "sorprendido", "esceptico", "dinero", "aprobando", "duda", "senalando",
     # Alias retrocompatibles para guion.json existentes:
     "neutro", "alerta", "eureka", "riendo",
 ]
-Sfx = Literal["ninguno", "whoosh", "impacto", "tension", "revelacion", "glitch", "ambiente", "digital", "transicion"]
+Sfx = Literal[
+    "ninguno", "whoosh", "impacto", "impact", "riser", "tension", "revelacion",
+    "glitch", "ambiente", "digital", "click", "transicion"
+]
 Mood = Literal["misterio", "tension", "epica", "curiosidad", "calma"]
+FormatoVideo = Literal["16:9", "9:16"]
 Acto = Literal["gancho", "contexto", "conflicto", "profundizacion", "giro", "resolucion", "cta"]
 Lado = Literal["izquierda", "derecha"]
+
+_MAPA_MOOD_CANONICO: dict[str, Mood] = {
+    "misterio": "misterio",
+    "tension": "tension",
+    "tensión": "tension",
+    "terror": "tension",
+    "horror": "tension",
+    "crimen": "misterio",
+    "suspenso": "tension",
+    "epica": "epica",
+    "épica": "epica",
+    "epico": "epica",
+    "curiosidad": "curiosidad",
+    "ciencia": "curiosidad",
+    "calma": "calma",
+}
+
+_MAPA_SFX_CANONICO: dict[str, Sfx] = {
+    "ninguno": "ninguno",
+    "none": "ninguno",
+    "": "ninguno",
+    "whoosh": "whoosh",
+    "transicion": "transicion",
+    "impacto": "impacto",
+    "impact": "impacto",
+    "riser": "riser",
+    "tension": "tension",
+    "tensión": "tension",
+    "revelacion": "revelacion",
+    "revelación": "revelacion",
+    "glitch": "glitch",
+    "ambiente": "ambiente",
+    "digital": "digital",
+    "teclado": "digital",
+    "click": "click",
+}
+
+
+class YouTubeMetadata(BaseModel):
+    titulos: list[str] = Field(default_factory=list, description="1 a 3 títulos sugeridos para YouTube.")
+    descripcion: str = Field(default="", description="Descripción optimizada para YouTube.")
+    tags: list[str] = Field(default_factory=list, description="Lista de etiquetas/tags para YouTube.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_yt(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if "titulo" in d and "titulos" not in d:
+            t_val = d.pop("titulo")
+            d["titulos"] = [t_val] if isinstance(t_val, str) else list(t_val or [])
+        if isinstance(d.get("titulos"), str):
+            d["titulos"] = [t.strip() for t in d["titulos"].splitlines() if t.strip()]
+        if isinstance(d.get("tags"), str):
+            d["tags"] = [t.strip() for t in d["tags"].split(",") if t.strip()]
+        return d
+
+
+class CapituloGuion(BaseModel):
+    escena_id: Optional[int] = Field(default=None, description="ID de la escena donde inicia el capítulo.")
+    titulo: str = Field(description="Nombre del capítulo.")
+    timestamp: Optional[str] = Field(default=None, description="Marca de tiempo opcional (ej. '00:00').")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_cap(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"titulo": data}
+        if isinstance(data, dict):
+            d = dict(data)
+            if "nombre" in d and "titulo" not in d:
+                d["titulo"] = d["nombre"]
+            if "escena" in d and "escena_id" not in d:
+                d["escena_id"] = d["escena"]
+            return d
+        return data
 
 
 class Escena(BaseModel):
     id: int
-    acto: Acto
-    voz: str = Field(description="Texto que lee la voz en off. Máximo 25 palabras.")
-    pose: Pose
-    host_visible: bool
-    host_lado: Lado
-    broll_query_en: str = Field(description="Consulta principal (3-5 palabras EN INGLÉS) para buscar en Pexels/Pixabay/YouTube.")
+    acto: Acto = "contexto"
+    voz: str = Field(description="Texto que lee la voz en off (admite pausas SSML <break time='400ms'/>).")
+    pose: Pose = "explicando"
+    host_visible: bool = True
+    host_lado: Lado = "izquierda"
+    broll_query_en: str = Field(default="", description="Consulta principal (3-5 palabras EN INGLÉS) para buscar en Pexels/Pixabay/YouTube.")
     broll_queries_en: list[str] = Field(
         default_factory=list,
         description="2 a 3 consultas en inglés concretas y filmables (de más específica a visualmente equivalente) para Pexels/Pixabay.",
@@ -47,9 +129,9 @@ class Escena(BaseModel):
     )
     broll_avoid_keywords: list[str] = Field(
         default_factory=list,
-        description="3 a 6 términos en inglés que deben rechazarse si aparecen en los tags porque chocan con el mood o son falsos amigos visuales (ej. ['escalator', 'beach', 'sunny', 'happy', 'party']).",
+        description="3 a 6 términos en inglés que deben rechazarse si aparecen en los tags porque chocan con el mood o son falsos amigos visuales.",
     )
-    broll_descripcion: str = Field(description="Descripción visual concreta del plano ideal, en español.")
+    broll_descripcion: str = Field(default="", description="Descripción visual concreta del plano ideal, en español.")
     puesto: Optional[int] = Field(
         default=None,
         description="Número del puesto del ranking (N..1) si esta escena inicia o pertenece a ese puesto; null en intro/outro.",
@@ -58,17 +140,125 @@ class Escena(BaseModel):
         default=None,
         description="Título corto en MAYÚSCULAS (2-5 palabras, sin el #N) cuando esta escena INICIA un puesto del ranking; null en las demás escenas.",
     )
-    texto_pantalla: str = Field(description="Cartel de puesto '#N: TITULO DEL PUESTO' en la primera escena de cada puesto, o cadena vacía.")
-    sfx: Sfx
-    music_mood: Mood
+    texto_pantalla: str = Field(default="", description="Cartel de puesto '#N: TITULO DEL PUESTO' en la primera escena de cada puesto, o cadena vacía.")
+    texto_destacado: str = Field(default="", description="1 a 2 palabras clave en MAYÚSCULAS para zoom punch y resalte karaoke en 9:16.")
+    sfx: Sfx = "ninguno"
+    music_mood: Mood = "misterio"
     short_id: Optional[int] = Field(default=None, description="1, 2 o 3 si la escena pertenece a un Short; null si no.")
     capitulo: Optional[str] = Field(default=None, description="Título de capítulo si esta escena abre uno; null si no.")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_campos_escena(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        # Alias de narración
+        for alias_voz in ("narracion", "texto_narracion", "texto", "locucion"):
+            if alias_voz in d and not d.get("voz"):
+                d["voz"] = d[alias_voz]
+        # Alias de pose
+        for alias_pose in ("pose_host", "host_pose"):
+            if alias_pose in d and not d.get("pose"):
+                d["pose"] = d[alias_pose]
+        if isinstance(d.get("pose"), str):
+            p_raw = d["pose"].strip().lower().translate(str.maketrans("áéíóú", "aeiou"))
+            if p_raw == "señalando":
+                p_raw = "senalando"
+            d["pose"] = config.POSE_ALIASES.get(p_raw, p_raw)
+        # Alias de música
+        for alias_mus in ("musica", "musica_mood", "mood_musica", "mood"):
+            if alias_mus in d and not d.get("music_mood"):
+                d["music_mood"] = d[alias_mus]
+        if isinstance(d.get("music_mood"), str):
+            m_raw = d["music_mood"].strip().lower()
+            if m_raw in _MAPA_MOOD_CANONICO:
+                d["music_mood"] = _MAPA_MOOD_CANONICO[m_raw]
+        # Alias de SFX
+        if isinstance(d.get("sfx"), str):
+            s_raw = d["sfx"].strip().lower()
+            if s_raw in _MAPA_SFX_CANONICO:
+                d["sfx"] = _MAPA_SFX_CANONICO[s_raw]
+        # Sincronizar broll_queries_en <-> broll_query_en
+        queries = d.get("broll_queries_en")
+        q_single = (d.get("broll_query_en") or "").strip()
+        if isinstance(queries, list) and queries:
+            queries_limpias = [str(q).strip() for q in queries if str(q).strip()]
+            d["broll_queries_en"] = queries_limpias
+            if not q_single and queries_limpias:
+                d["broll_query_en"] = queries_limpias[0]
+        elif q_single:
+            d["broll_queries_en"] = [q_single]
+        if not d.get("broll_descripcion"):
+            d["broll_descripcion"] = d.get("broll_query_en") or "Plano documental de archivo"
+        # Inferir acto si no viene en JSON externo
+        if not d.get("acto"):
+            if d.get("id") == 1 and not d.get("puesto"):
+                d["acto"] = "gancho"
+            elif d.get("puesto_titulo"):
+                d["acto"] = "conflicto"
+            elif d.get("puesto"):
+                d["acto"] = "profundizacion"
+            else:
+                d["acto"] = "resolucion"
+        return d
+
 
 class Guion(BaseModel):
-    titulo_trabajo: str
-    resumen: str
+    titulo_trabajo: str = Field(description="Título principal del proyecto o video.")
+    formato: FormatoVideo = Field(default="16:9", description="Formato de salida: '16:9' (Documental) o '9:16' (Reel/Short).")
+    mood: Mood = Field(default="misterio", description="Mood general del guion: misterio, tension, epica, curiosidad o calma.")
+    mood_original: str = Field(default="misterio", description="Mood nominal original del archivo importado (ej. misterio, terror, crimen, tension).")
+    top_n: Optional[int] = Field(default=None, description="Cantidad de puestos del ranking (ej. 3, 5, 7).")
+    minutos: Optional[float] = Field(default=None, description="Duración objetivo en minutos.")
+    resumen: str = Field(default="", description="Resumen ejecutivo o sinopsis del documental.")
+    youtube_metadata: Optional[YouTubeMetadata] = Field(default=None, description="Metadatos para publicación en YouTube.")
+    capitulos: list[CapituloGuion] = Field(default_factory=list, description="Lista de capítulos del video.")
+    hook: Optional[str] = Field(default=None, description="Frase gancho inicial (especialmente útil en 9:16).")
+    bucle_loop_frase: Optional[str] = Field(default=None, description="Frase de cierre para bucle en 9:16.")
     escenas: list[Escena]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalizar_raiz_guion(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if not d.get("titulo_trabajo") and d.get("titulo"):
+            d["titulo_trabajo"] = d["titulo"]
+        if not d.get("youtube_metadata") and d.get("metadatos_youtube"):
+            d["youtube_metadata"] = d["metadatos_youtube"]
+        mood_raw = str(d.get("mood") or "misterio").strip().lower()
+        d["mood_original"] = mood_raw
+        d["mood"] = _MAPA_MOOD_CANONICO.get(mood_raw, mood_raw)
+        if not d.get("resumen"):
+            yt = d.get("youtube_metadata")
+            if isinstance(yt, dict) and yt.get("descripcion"):
+                d["resumen"] = str(yt["descripcion"])
+            else:
+                d["resumen"] = str(d.get("titulo_trabajo") or "")
+        # Propagar mood general y capítulos a las escenas si no tienen uno propio
+        caps_map: dict[int, str] = {}
+        for c in d.get("capitulos") or []:
+            if isinstance(c, dict) and c.get("escena_id") and (c.get("titulo") or c.get("nombre")):
+                caps_map[int(c["escena_id"])] = str(c.get("titulo") or c.get("nombre"))
+        escenas_in = d.get("escenas")
+        if isinstance(escenas_in, list):
+            escenas_norm = []
+            for idx, esc in enumerate(escenas_in, 1):
+                if isinstance(esc, dict):
+                    e_copy = dict(esc)
+                    if "id" not in e_copy:
+                        e_copy["id"] = idx
+                    if not e_copy.get("music_mood") and not e_copy.get("musica"):
+                        e_copy["music_mood"] = d["mood"]
+                    if not e_copy.get("capitulo") and e_copy["id"] in caps_map:
+                        e_copy["capitulo"] = caps_map[e_copy["id"]]
+                    escenas_norm.append(e_copy)
+                else:
+                    escenas_norm.append(esc)
+            d["escenas"] = escenas_norm
+        return d
 
 
 def extraer_top_n(tema: str, minutos: float = 8.5) -> int:
@@ -364,11 +554,23 @@ def estructurar(material: str, minutos: float, tema: str = "") -> Guion:
 
 
 # ------------------------------------------------------------------ salida
+def _contar_palabras_habladas(texto: str) -> int:
+    limpio = re.sub(r"<[^>]+>", " ", texto or "")
+    return len([w for w in limpio.split() if w.strip()])
+
+
 def _montaje_txt(p: Proyecto, g: Guion) -> str:
     t = 0.0
-    lineas = [f"PROYECTO: {p.tema}", "FORMATO: 16:9 (Documental TV)", f"TÍTULO DE TRABAJO: {g.titulo_trabajo}", "-" * 80]
+    lineas = [
+        f"PROYECTO: {p.tema}",
+        f"FORMATO: {g.formato} ({'Documental TV' if g.formato == '16:9' else 'Reel Vertical'})",
+        f"TÍTULO DE TRABAJO: {g.titulo_trabajo}",
+        f"MOOD GENERAL: {g.mood_original} ({g.mood}) | TOP N: {g.top_n or '-'}",
+        "-" * 80,
+    ]
     for e in g.escenas:
-        dur = min(len(e.voz.split()) / config.PALABRAS_POR_SEG, config.MAX_SEG_ESCENA)
+        n_pal = max(1, _contar_palabras_habladas(e.voz))
+        dur = min(n_pal / config.PALABRAS_POR_SEG, config.MAX_SEG_ESCENA)
         ini, fin = t, t + dur
         t = fin
         if e.capitulo:
@@ -394,7 +596,7 @@ def validar(g: Guion, minutos: Optional[float] = None) -> list[str]:
     avisos = []
     total_palabras = 0
     for e in g.escenas:
-        n = len(e.voz.split())
+        n = _contar_palabras_habladas(e.voz)
         total_palabras += n
         if n > config.MAX_PALABRAS_ESCENA:
             avisos.append(f"Escena {e.id}: {n} palabras (máx recomendado {config.MAX_PALABRAS_ESCENA}).")
@@ -403,18 +605,200 @@ def validar(g: Guion, minutos: Optional[float] = None) -> list[str]:
         max_pal = int(round(minutos * 150))
         est_s = total_palabras / config.PALABRAS_POR_SEG
         print(
-            f"📏 Guion generado: {len(g.escenas)} escenas | {total_palabras} palabras totales "
-            f"(objetivo para {minutos} min: {min_pal}-{max_pal} pal, est. ~{int(est_s//60)}m {int(est_s%60):02d}s)"
+            f"📏 Guion validado: {len(g.escenas)} escenas | {total_palabras} palabras totales "
+            f"(objetivo para {minutos:.2f} min: {min_pal}-{max_pal} pal, est. ~{int(est_s//60)}m {int(est_s%60):02d}s)"
         )
         if total_palabras < min_pal or total_palabras > max_pal:
             avisos.append(
                 f"Conteo total de palabras ({total_palabras}) fuera del rango ideal ({min_pal}-{max_pal}) "
-                f"para {minutos} min (~{int(est_s)}s estimados)."
+                f"para {minutos:.2f} min (~{int(est_s)}s estimados)."
             )
-    shorts = {e.short_id for e in g.escenas if e.short_id}
-    if len(shorts) < 2:
-        avisos.append(f"Solo se marcaron {len(shorts)} Short(s).")
     return avisos
+
+
+def validar_json_externo(
+    ruta_json: Path,
+    formato_esperado: Optional[str] = None,
+) -> tuple[Optional[Guion], list[str], list[str]]:
+    """Valida un archivo JSON de guion externo devolviendo (guion_obj, errores_por_campo, avisos)."""
+    errores: list[str] = []
+    avisos: list[str] = []
+
+    if not ruta_json.exists() or not ruta_json.is_file():
+        return None, [f"archivo: No existe el archivo '{ruta_json}'."], []
+
+    try:
+        texto_raw = ruta_json.read_text(encoding="utf-8")
+    except Exception as e:
+        return None, [f"archivo: No se pudo leer en UTF-8 ({e})."], []
+
+    try:
+        datos = json.loads(texto_raw)
+    except json.JSONDecodeError as e:
+        return None, [f"json (línea {e.lineno}, col {e.colno}): Sintaxis JSON inválida ({e.msg})."], []
+
+    if not isinstance(datos, dict):
+        return None, ["raiz: El JSON debe ser un objeto (diccionario) en su nivel raíz."], []
+
+    # Validaciones explícitas de campos raíz
+    titulo_raw = str(datos.get("titulo_trabajo") or datos.get("titulo") or "").strip()
+    if not titulo_raw:
+        errores.append("titulo: El campo 'titulo' (o 'titulo_trabajo') es obligatorio y no puede estar vacío.")
+
+    formato_raw = str(datos.get("formato") or formato_esperado or "16:9").strip()
+    if formato_raw not in ("16:9", "9:16"):
+        errores.append(f"formato: Valor '{formato_raw}' inválido. Debe ser '16:9' o '9:16'.")
+    elif formato_esperado and datos.get("formato") and formato_raw != formato_esperado:
+        avisos.append(f"formato: El JSON declara '{formato_raw}' pero se invocó en pipeline '{formato_esperado}'.")
+
+    mood_raiz_raw = str(datos.get("mood") or "misterio").strip().lower()
+    if mood_raiz_raw not in _MAPA_MOOD_CANONICO:
+        errores.append(
+            f"mood: Valor '{mood_raiz_raw}' inválido. Permitidos: misterio, tension, terror, crimen, epica, curiosidad, calma."
+        )
+
+    escenas_raw = datos.get("escenas")
+    if not isinstance(escenas_raw, list) or len(escenas_raw) == 0:
+        errores.append("escenas: Debe ser una lista no vacía de escenas.")
+    else:
+        for idx, esc in enumerate(escenas_raw):
+            pref = f"escenas[{idx}]"
+            if not isinstance(esc, dict):
+                errores.append(f"{pref}: Cada escena debe ser un objeto JSON.")
+                continue
+            voz_val = str(
+                esc.get("voz") or esc.get("narracion") or esc.get("texto_narracion") or esc.get("texto") or ""
+            ).strip()
+            if not voz_val:
+                errores.append(f"{pref}.voz: El texto de narración ('voz' / 'narracion') es obligatorio y no puede estar vacío.")
+
+            queries_val = esc.get("broll_queries_en")
+            query_single = str(esc.get("broll_query_en") or "").strip()
+            if isinstance(queries_val, list):
+                limpias = [str(q).strip() for q in queries_val if str(q).strip()]
+                if not limpias and not query_single:
+                    errores.append(f"{pref}.broll_queries_en: Debe contener al menos 1 consulta de búsqueda en inglés.")
+            elif queries_val is not None:
+                errores.append(f"{pref}.broll_queries_en: Debe ser una lista de strings en inglés (ej. ['dark hallway night', 'old archive footage']).")
+            elif not query_single:
+                errores.append(f"{pref}.broll_queries_en: Falta 'broll_queries_en' (lista de 2-3 consultas en inglés).")
+
+            pose_raw = str(esc.get("pose") or esc.get("pose_host") or "explicando").strip().lower()
+            pose_sin_tilde = pose_raw.translate(str.maketrans("áéíóú", "aeiou"))
+            if pose_sin_tilde == "señalando":
+                pose_sin_tilde = "senalando"
+            pose_resuelta = config.POSE_ALIASES.get(pose_sin_tilde, pose_sin_tilde)
+            if pose_resuelta not in config.POSES:
+                errores.append(
+                    f"{pref}.pose: Pose '{pose_raw}' desconocida. Poses válidas: {', '.join(config.POSES)}."
+                )
+            else:
+                mood_esc_raw = str(esc.get("music_mood") or esc.get("musica") or mood_raiz_raw).strip().lower()
+                if pose_resuelta == "dinero" and (
+                    es_mood_oscuro_sin_dinero(mood=mood_raiz_raw, tema=titulo_raw, texto_voz=voz_val)
+                    or es_mood_oscuro_sin_dinero(mood=mood_esc_raw, tema=titulo_raw, texto_voz=voz_val)
+                ):
+                    errores.append(
+                        f"{pref}.pose: La pose 'dinero' no se acepta en guiones con mood '{mood_raiz_raw}' / '{mood_esc_raw}' "
+                        f"(prohibida en misterio, terror, crimen y tensión). Usa: sorprendido, pensativo, duda, esceptico, senalando o explicando."
+                    )
+
+            mus_raw = str(esc.get("music_mood") or esc.get("musica") or mood_raiz_raw).strip().lower()
+            if mus_raw not in _MAPA_MOOD_CANONICO:
+                errores.append(
+                    f"{pref}.music_mood: Mood musical '{mus_raw}' inválido. Permitidos: {', '.join(config.MUSIC_MOODS)}."
+                )
+
+            sfx_raw = str(esc.get("sfx") or "ninguno").strip().lower()
+            if sfx_raw not in _MAPA_SFX_CANONICO:
+                errores.append(
+                    f"{pref}.sfx: Efecto '{sfx_raw}' inválido. Permitidos: ninguno, whoosh, impacto, riser, tension, revelacion, glitch, ambiente, digital, click, transicion."
+                )
+
+    if errores:
+        return None, errores, avisos
+
+    try:
+        guion_obj = Guion.model_validate(datos)
+    except ValidationError as exc:
+        for err in exc.errors():
+            loc = ".".join(str(x) for x in err.get("loc", ()))
+            errores.append(f"{loc}: {err.get('msg')}")
+        return None, errores, avisos
+
+    # Normalizar poses y tarjetas TOP #N en 16:9
+    for esc in guion_obj.escenas:
+        esc.pose = normalizar_pose(
+            esc.pose,
+            mood=guion_obj.mood_original or esc.music_mood,
+            tema=guion_obj.titulo_trabajo,
+            texto_voz=esc.voz,
+        )  # type: ignore[assignment]
+
+    if (formato_esperado or guion_obj.formato) == "16:9":
+        top_n_detectado = guion_obj.top_n
+        if not top_n_detectado:
+            puestos_en_escenas = [e.puesto for e in guion_obj.escenas if e.puesto and e.puesto > 0]
+            if puestos_en_escenas:
+                top_n_detectado = max(puestos_en_escenas)
+            else:
+                pal_tot = sum(_contar_palabras_habladas(e.voz) for e in guion_obj.escenas)
+                min_est = guion_obj.minutos or round(max(0.5, pal_tot / float(config.PALABRAS_POR_MIN)), 2)
+                top_n_detectado = extraer_top_n(guion_obj.titulo_trabajo, min_est)
+        guion_obj.top_n = top_n_detectado
+        asegurar_tarjetas_top(guion_obj, top_n=top_n_detectado)
+
+    return guion_obj, [], avisos
+
+
+def importar_guion_archivo(
+    ruta_json: Path,
+    formato_forzado: Optional[str] = None,
+    sin_host: bool = False,
+    reusar: bool = False,
+) -> tuple[Proyecto, Guion, list[str]]:
+    """Valida e importa un archivo JSON de guion externo, creando el proyecto y sus guías de montaje y doblaje."""
+    guion_obj, errores, avisos = validar_json_externo(ruta_json, formato_esperado=formato_forzado)
+    if errores or guion_obj is None:
+        detalle = "\n".join(f"  ❌ [{e}]" for e in errores)
+        raise ValueError(f"El archivo '{ruta_json}' contiene errores de validación:\n{detalle}")
+
+    palabras_tot = sum(_contar_palabras_habladas(e.voz) for e in guion_obj.escenas)
+    minutos_calc = guion_obj.minutos or round(max(0.5, palabras_tot / float(config.PALABRAS_POR_MIN)), 2)
+    guion_obj.minutos = minutos_calc
+
+    try:
+        p = Proyecto.crear(guion_obj.titulo_trabajo, minutos=minutos_calc, lang="es", reusar=reusar)
+    except TypeError:
+        p = Proyecto.crear(guion_obj.titulo_trabajo, minutos=minutos_calc, lang="es")
+    if sin_host:
+        p.datos["sin_host"] = True
+        for e in guion_obj.escenas:
+            e.host_visible = False
+
+    p.datos["formato"] = formato_forzado or guion_obj.formato
+    p.datos["mood"] = guion_obj.mood
+    p.datos["mood_original"] = guion_obj.mood_original
+    p.datos["top_n"] = guion_obj.top_n
+    p.datos["guion_origen"] = str(ruta_json.resolve())
+
+    # Invalidar b_roll/ y renders/ si el número, orden o contenido de escenas cambió (Tarea 2)
+    if hasattr(p, "invalidar_cache_si_guion_cambio"):
+        p.invalidar_cache_si_guion_cambio(guion_obj.escenas)
+
+    p.ruta("guion", "guion.json").write_text(
+        json.dumps(guion_obj.model_dump(), ensure_ascii=False, indent=2), "utf-8"
+    )
+    p.ruta("guion", "guion_montaje.txt").write_text(_montaje_txt(p, guion_obj), "utf-8")
+    p.ruta("guion", "guion_doblaje.md").write_text(_guion_doblaje_md(p, guion_obj), "utf-8")
+    if not p.ruta("guion", "fuentes.md").exists():
+        p.ruta("guion", "fuentes.md").write_text(
+            f"# Fuentes\n\n- Guion importado desde `{ruta_json.name}` (Agente Pluma / externo)\n",
+            "utf-8",
+        )
+    p.marcar("guion", "revisar")
+    avisos_val = validar(guion_obj, minutos=minutos_calc)
+    return p, guion_obj, avisos + avisos_val
 
 
 def etapa_guion(p: Proyecto) -> list[str]:
@@ -429,6 +813,9 @@ def etapa_guion(p: Proyecto) -> list[str]:
     if p.datos.get("sin_host", False):
         for e in g.escenas:
             e.host_visible = False
+
+    if hasattr(p, "invalidar_cache_si_guion_cambio"):
+        p.invalidar_cache_si_guion_cambio(g.escenas)
 
     p.ruta("guion", "guion.json").write_text(json.dumps(g.model_dump(), ensure_ascii=False, indent=2), "utf-8")
     p.ruta("guion", "guion_montaje.txt").write_text(_montaje_txt(p, g), "utf-8")
@@ -454,32 +841,31 @@ def _guion_doblaje_md(p: Proyecto, g: Guion) -> str:
     }
     lineas = [
         f"# 🎙️ Guion de Locución y Doblaje Profesional: {p.tema}",
-        f"> **Proyecto:** `{p.datos.get('slug')}` | **Duración objetivo:** {p.datos.get('minutos', 1.0)} min",
-        "> **Instrucción para el locutor:** Respete los tiempos de entrada indicados para mantener la sincronización con el montaje visual.",
+        f"> **Proyecto:** `{p.datos.get('slug')}` | **Formato:** `{g.formato}` | **Duración objetivo:** {p.datos.get('minutos', 1.0)} min",
+        "> **Instrucción para el locutor:** Respete los tiempos de entrada y las pausas SSML (`<break time=\"...\"/>`) indicadas para mantener la sincronización con el montaje visual.",
         "\n---\n"
     ]
     t = 0.0
     for e in g.escenas:
-        palabras = e.voz.split()
-        conteo = len(palabras)
+        conteo = max(1, _contar_palabras_habladas(e.voz))
         dur_est = min(conteo / config.PALABRAS_POR_SEG, config.MAX_SEG_ESCENA)
         ini_str = f"{int(t//60):02d}:{int(t%60):02d}"
         fin_str = f"{int((t+dur_est)//60):02d}:{int((t+dur_est)%60):02d}"
         tono = tonos_por_pose.get(e.pose, "Tono documental neutro")
-        
-        # Resaltar en negrita la palabra clave o texto en pantalla
+
         texto_destacado = e.voz
         if e.texto_pantalla and e.texto_pantalla.lower() in e.voz.lower():
-            # resaltar si coincide
             idx = e.voz.lower().find(e.texto_pantalla.lower())
             if idx != -1:
                 pal_orig = e.voz[idx:idx+len(e.texto_pantalla)]
                 texto_destacado = e.voz[:idx] + f"**{pal_orig}**" + e.voz[idx+len(e.texto_pantalla):]
 
         lineas.append(f"### Escena {e.id:02d} `[{ini_str} - {fin_str}]` *(~{dur_est:.1f}s | {conteo} palabras)*")
-        lineas.append(f"> **Dirección de voz:** [{tono}]")
+        lineas.append(f"> **Dirección de voz:** [{tono}] (Pose: `{e.pose}`)")
+        if e.puesto is not None:
+            lineas.append(f"> **Puesto del Ranking:** `#{e.puesto}`" + (f" — `{e.puesto_titulo}`" if e.puesto_titulo else ""))
         if e.texto_pantalla:
-            lineas.append(f"> **Palabra en pantalla:** `{e.texto_pantalla}`")
+            lineas.append(f"> **Tarjeta en pantalla:** `{e.texto_pantalla}`")
         lineas.append(f"\n> **LOCUCIÓN:**\n> \"{texto_destacado}\"\n")
         lineas.append("---\n")
         t += dur_est
@@ -488,5 +874,14 @@ def _guion_doblaje_md(p: Proyecto, g: Guion) -> str:
 
 
 def cargar_guion(p: Proyecto) -> Guion:
-    """Lee guion.json (incluye las ediciones manuales del usuario)."""
-    return Guion.model_validate_json(p.ruta("guion", "guion.json").read_text("utf-8"))
+    """Lee guion.json (incluye las ediciones manuales del usuario) y asegura poses válidas."""
+    g = Guion.model_validate_json(p.ruta("guion", "guion.json").read_text("utf-8"))
+    mood_ref = str(p.datos.get("mood_original") or g.mood_original or g.mood or "misterio")
+    for esc in g.escenas:
+        esc.pose = normalizar_pose(
+            esc.pose,
+            mood=mood_ref if es_mood_oscuro_sin_dinero(mood=mood_ref) else esc.music_mood,
+            tema=p.tema,
+            texto_voz=esc.voz,
+        )  # type: ignore[assignment]
+    return g

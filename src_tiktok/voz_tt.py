@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 import edge_tts
 from src.estado import Proyecto
+from src.voz import preparar_texto_con_pausas
 from src_tiktok.guion_tt import GuionTikTok
 
 
@@ -14,7 +15,8 @@ PITCH_TIKTOK = "-1Hz"
 
 
 async def _sintetizar_escena(texto: str, destino: Path):
-    com = edge_tts.Communicate(texto, VOICE_TIKTOK, rate=RATE_TIKTOK, pitch=PITCH_TIKTOK)
+    texto_limpio = preparar_texto_con_pausas(texto)
+    com = edge_tts.Communicate(texto_limpio, VOICE_TIKTOK, rate=RATE_TIKTOK, pitch=PITCH_TIKTOK)
     await com.save(str(destino))
 
 
