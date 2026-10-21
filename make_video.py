@@ -21,6 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 
 def cmd_doctor(_args) -> int:
+    from src.edicion import cargar_config_edicion, listar_archivos_overlay
     from src.render import listar_archivos_audio, resolver_musica_mood, resolver_sfx_categoria
 
     ok = True
@@ -35,6 +36,7 @@ def cmd_doctor(_args) -> int:
         ("GEMINI_API_KEY", True),
         ("PIXABAY_API_KEY", True),
         ("PEXELS_API_KEY", False),
+        ("FREESOUND_API_KEY", False),
     ]:
         val = getattr(config, nombre)
         marca = "✅" if val else ("❌" if req else "➖ (opcional / fallback activo)")
@@ -48,6 +50,26 @@ def cmd_doctor(_args) -> int:
             print(f"  ⚠️ YTDLP_COOKIES configurado pero el archivo no existe: {config.YTDLP_COOKIES}")
     else:
         print("  ➖ YTDLP_COOKIES (opcional: no configurado; yt-dlp usará modo sin cookies y fallback a Pexels/Pixabay)")
+
+    print("\n== Configuración de Edición (config/edicion.yaml) ==")
+    cfg_ed = cargar_config_edicion()
+    if config.CONFIG_EDICION_YAML.exists():
+        print(f"  ✅ {config.CONFIG_EDICION_YAML.relative_to(config.RAIZ).as_posix()} cargado correctamente")
+    else:
+        print("  ⚠️ config/edicion.yaml no encontrado -> usando valores por defecto internos")
+    h_cfg = cfg_ed.get("formatos", {}).get("horizontal_16_9", {})
+    v_cfg = cfg_ed.get("formatos", {}).get("vertical_9_16", {})
+    print(
+        f"     • 16:9 Documental: color_grading={h_cfg.get('color_grading')}, vignette={h_cfg.get('vignette')}, "
+        f"grain={h_cfg.get('film_grain_ffmpeg')}, overlay={h_cfg.get('video_overlay')}, "
+        f"ken_burns={h_cfg.get('ken_burns')}, xfade={h_cfg.get('transiciones_xfade')}, "
+        f"top_fx={h_cfg.get('top_rank_fx')}, sidechain={h_cfg.get('audio_ducking_sidechain')}"
+    )
+    print(
+        f"     • 9:16 Reels:      cortes={v_cfg.get('duracion_corte_min_s')}-{v_cfg.get('duracion_corte_max_s')}s, "
+        f"karaoke={v_cfg.get('subtitulos_karaoke')}, zoom_punch={v_cfg.get('zoom_punch')}, "
+        f"sidechain={v_cfg.get('audio_ducking_sidechain')}"
+    )
 
     print("\n== Identidad de Marca (Host Sprites) ==")
     poses_ok = []
@@ -65,39 +87,56 @@ def cmd_doctor(_args) -> int:
 
     print("\n== Música por Mood (assets/music/) ==")
     al_menos_una_musica = False
+    total_musica = 0
     for mood in config.MUSIC_MOODS:
         carpeta_m = config.MUSIC_DIR / mood
         archivos_m = listar_archivos_audio(carpeta_m)
+        total_musica += len(archivos_m)
         if archivos_m:
             al_menos_una_musica = True
-            print(f"  ✅ mood '{mood}': {len(archivos_m)} pista(s) ({archivos_m[0].name})")
+            ejemplos = ", ".join(a.name for a in archivos_m[:3]) + ("..." if len(archivos_m) > 3 else "")
+            print(f"  ✅ mood '{mood}': {len(archivos_m)} archivo(s) ({ejemplos})")
         else:
             ruta_fb, mood_fb, _ = resolver_musica_mood(mood, silencioso=True)
-            estado_dir = "carpeta vacía" if carpeta_m.exists() else "carpeta no existe"
+            estado_dir = "0 archivos" if carpeta_m.exists() else "carpeta no existe"
             if ruta_fb:
                 al_menos_una_musica = True
-                print(f"  ⚠️ mood '{mood}': {estado_dir} -> usará fallback '{mood_fb}' ({ruta_fb.name})")
+                print(f"  ⚠️ mood '{mood}': {estado_dir} -> degradará con elegancia a '{mood_fb}' ({ruta_fb.name})")
             else:
-                print(f"  ❌ mood '{mood}': {estado_dir} y sin fallback disponible")
+                print(f"  ❌ mood '{mood}': {estado_dir} y sin fallback disponible (ejecuta: python scripts/descargar_assets.py)")
+    print(f"     Total pistas de música: {total_musica}")
     ok &= al_menos_una_musica
 
     print("\n== Efectos de Sonido por Categoría (assets/sfx/) ==")
     categorias_sfx = [c for c in config.SFX_CATEGORIAS if c != "ninguno"]
-    for extra in ("click", "teclado"):
-        if extra not in categorias_sfx:
-            categorias_sfx.append(extra)
+    total_sfx = 0
     for cat in categorias_sfx:
         carpeta_s = config.SFX_DIR / cat
         archivos_s = listar_archivos_audio(carpeta_s)
+        total_sfx += len(archivos_s)
         if archivos_s:
-            print(f"  ✅ sfx '{cat}': {len(archivos_s)} sonido(s)")
+            print(f"  ✅ sfx '{cat}': {len(archivos_s)} archivo(s)")
         else:
             ruta_fb, cat_fb, _ = resolver_sfx_categoria(cat, silencioso=True)
-            estado_dir = "carpeta vacía" if carpeta_s.exists() else "carpeta no existe"
+            estado_dir = "0 archivos" if carpeta_s.exists() else "carpeta no existe"
             if ruta_fb:
-                print(f"  ⚠️ sfx '{cat}': {estado_dir} -> usará fallback '{cat_fb}' ({ruta_fb.name})")
+                print(f"  ⚠️ sfx '{cat}': {estado_dir} -> degradará con elegancia a '{cat_fb}' ({ruta_fb.name})")
             else:
                 print(f"  ❌ sfx '{cat}': {estado_dir} y sin fallback disponible")
+    print(f"     Total archivos SFX: {total_sfx}")
+
+    print("\n== Overlays de Video por Tipo (assets/overlays/) ==")
+    total_overlays = 0
+    for tipo_ov in config.OVERLAY_TIPOS:
+        carpeta_o = config.OVERLAYS_DIR / tipo_ov
+        archivos_o = listar_archivos_overlay(carpeta_o)
+        total_overlays += len(archivos_o)
+        if archivos_o:
+            print(f"  ✅ overlay '{tipo_ov}': {len(archivos_o)} archivo(s)")
+        else:
+            estado_dir = "0 archivos" if carpeta_o.exists() else "carpeta no existe"
+            print(f"  ⚠️ overlay '{tipo_ov}': {estado_dir} -> degradará con elegancia a otro overlay o grano/viñeta FFmpeg")
+    print(f"     Total archivos de overlay: {total_overlays}")
 
     print("\nTodo listo para operar ✅" if ok else "\nFaltan elementos obligatorios ❌")
     return 0 if ok else 1
