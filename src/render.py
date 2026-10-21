@@ -21,7 +21,7 @@ from typing import Optional
 
 from . import config
 from .estado import Proyecto
-from .guion import cargar_guion, Guion, Escena
+from .guion import cargar_guion, Guion, Escena, extraer_top_n, asegurar_tarjetas_top
 from .host_anim import obtener_sprite
 
 
@@ -72,6 +72,7 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
     carpeta_stems = p.carpeta / "stems"
     carpeta_stems.mkdir(parents=True, exist_ok=True)
     guion = cargar_guion(p)
+    asegurar_tarjetas_top(guion, top_n=extraer_top_n(p.tema, float(p.datos.get("minutos", 1.0))))
     duracion_total = sum(duraciones.values())
 
     # 1. PISTA DE VOZ (IA o Reemplazo Humano)
@@ -123,19 +124,23 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
         _ejecutar_cmd(cmd_silencio)
 
     # B) Planificar eventos de SFX a lo largo de la línea de tiempo:
-    #    - Transición/Whoosh + Impacto al cambiar de puesto del Top (#5 al #1)
+    #    - Transición/Whoosh + Impacto al cambiar de puesto del Top (#N al #1)
     #    - Sonido de Typing/Click únicamente cuando aparece un título/subtítulo, con duración corta (~1.2s)
     #    - SFX específicos del guion (glitch, revelación, impacto)
     eventos_sfx = []
     t_acum = 0.0
+    puestos_sfx_vistos: set[int] = set()
 
     for i, esc in enumerate(guion.escenas, 1):
         dur = duraciones.get(esc.id, 5.0)
         txt = (esc.texto_pantalla or "").strip()
-        es_top = bool(re.search(r"#\s*\d+", txt))
-        es_titulo = bool(txt)
+        es_inicio_puesto = bool(esc.puesto and esc.puesto_titulo and esc.puesto not in puestos_sfx_vistos)
+        if es_inicio_puesto and esc.puesto:
+            puestos_sfx_vistos.add(esc.puesto)
+        es_top = es_inicio_puesto or bool(re.search(r"(?:#|top\s*#?|puesto\s*#?)\s*\d+", txt, re.IGNORECASE))
+        es_titulo = es_inicio_puesto or bool(txt)
 
-        # 1. Transición sonora al cambiar de puesto del Top (#5, #4, #3, #2, #1)
+        # 1. Transición sonora al cambiar de puesto del Top (#N..#1)
         if es_top:
             sfx_trans = _obtener_sfx("whoosh") or _obtener_sfx("transicion") or _obtener_sfx("impacto")
             if sfx_trans:
@@ -354,7 +359,7 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
     cmd_concat_v = [
         ffmpeg, "-y", "-f", "concat", "-safe", "0",
         "-i", str(lista_v),
-        "-vf", f"ass={ruta_ass_escapada}",
+        "-vf", f"ass='{ruta_ass_escapada}'",
         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
         "-an",
         str(video_mudo)

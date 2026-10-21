@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from . import config
 from .estado import Proyecto
-from .guion import cargar_guion
+from .guion import cargar_guion, extraer_top_n, asegurar_tarjetas_top
 
 
 def _formatear_tiempo_srt(segundos: float) -> str:
@@ -54,8 +54,12 @@ def generar_srt(p: Proyecto, duraciones: dict[int, float]) -> Path:
 
 
 def generar_tarjetas_ass(p: Proyecto, duraciones: dict[int, float]) -> Path:
-    """Genera archivo de subtítulos estilizados .ass para tarjetas de puesto del Top."""
+    """Genera archivo de subtítulos estilizados .ass garantizando una tarjeta TOP #N al inicio de cada puesto."""
     guion = cargar_guion(p)
+    minutos = float(p.datos.get("minutos", 1.0))
+    top_n = extraer_top_n(p.tema, minutos)
+    asegurar_tarjetas_top(guion, top_n=top_n)
+
     carpeta_renders = p.carpeta / "renders"
     carpeta_renders.mkdir(parents=True, exist_ok=True)
     ruta_ass = carpeta_renders / "tarjetas_puestos.ass"
@@ -76,6 +80,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
     eventos = []
     tiempo_actual = 0.0
     primer_top_visto = False
+    puestos_emitidos: set[int] = set()
 
     for esc in guion.escenas:
         dur = duraciones.get(esc.id, 5.0)
@@ -84,37 +89,49 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
         tiempo_actual = t_fin
 
         txt = (esc.texto_pantalla or "").strip()
-        if not txt:
+        numero: int | None = None
+        titulo: str = ""
+
+        if esc.puesto and esc.puesto not in puestos_emitidos and esc.puesto_titulo:
+            numero = esc.puesto
+            titulo = esc.puesto_titulo.strip()
+        elif txt:
+            m = re.search(r"(?:TOP\s*)?(?:PUESTO\s*)?#?\s*(\d{1,2})\s*[:\-\.\–—]*\s*(.*)", txt, re.IGNORECASE)
+            if m and (txt.startswith("#") or "top" in txt.lower() or "puesto" in txt.lower() or esc.puesto):
+                cand_num = int(m.group(1))
+                if cand_num not in puestos_emitidos:
+                    numero = cand_num
+                    titulo = m.group(2).strip()
+
+        if numero is None and not txt:
             continue
 
-        # Duración de la tarjeta: 3.5 segundos exactos para que se lea y se quite rápido
+        # Duración de la tarjeta: hasta 3.5 segundos (o la duración de la escena si es menor)
         t_evento_fin = min(t_fin, t_inicio + 3.5)
         ini_str = _formatear_tiempo_ass(t_inicio)
         fin_str = _formatear_tiempo_ass(t_evento_fin)
 
-        m = re.search(r"#\s*(\d+)[:\s]*(.*)", txt)
-        if m:
-            numero = m.group(1)
-            titulo = m.group(2).strip()
-            
-            # Si es el primer título del top que aparece, lo hacemos más grande e impactante
+        if numero is not None:
+            puestos_emitidos.add(numero)
+            # Escapar caracteres especiales ASS en el título
+            titulo_ass = titulo.replace("{", "(").replace("}", ")")
             if not primer_top_visto:
                 primer_top_visto = True
-                if titulo:
-                    texto_formateado = f"{{\\fs115}}{{\\c&H0000E6FF&}}TOP #{numero}\\N{{\\c&H00FFFFFF&}}{{\\fs76}}{titulo}"
+                if titulo_ass:
+                    texto_formateado = f"{{\\fs115}}{{\\c&H0000E6FF&}}TOP #{numero}\\N{{\\c&H00FFFFFF&}}{{\\fs76}}{titulo_ass}"
                 else:
                     texto_formateado = f"{{\\fs120}}{{\\c&H0000E6FF&}}TOP #{numero}"
             else:
-                if titulo:
-                    texto_formateado = f"{{\\fs90}}{{\\c&H0000E6FF&}}TOP #{numero}\\N{{\\c&H00FFFFFF&}}{{\\fs62}}{titulo}"
+                if titulo_ass:
+                    texto_formateado = f"{{\\fs90}}{{\\c&H0000E6FF&}}TOP #{numero}\\N{{\\c&H00FFFFFF&}}{{\\fs62}}{titulo_ass}"
                 else:
                     texto_formateado = f"{{\\fs95}}{{\\c&H0000E6FF&}}TOP #{numero}"
         else:
-            # Título general / Intro
+            txt_ass = txt.replace("{", "(").replace("}", ")")
             if not primer_top_visto:
-                texto_formateado = f"{{\\fs105}}{{\\c&H0000E6FF&}}{txt}"
+                texto_formateado = f"{{\\fs105}}{{\\c&H0000E6FF&}}{txt_ass}"
             else:
-                texto_formateado = f"{{\\fs90}}{{\\c&H0000E6FF&}}{txt}"
+                texto_formateado = f"{{\\fs90}}{{\\c&H0000E6FF&}}{txt_ass}"
 
         eventos.append(
             f"Dialogue: 1,{ini_str},{fin_str},TopCentered,,0,0,0,,{{\\fad(250,250)}}{texto_formateado}"

@@ -6,6 +6,7 @@ con response_schema (salida JSON estricta) en la misma petición.
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Literal, Optional
 
@@ -49,7 +50,15 @@ class Escena(BaseModel):
         description="3 a 6 términos en inglés que deben rechazarse si aparecen en los tags porque chocan con el mood o son falsos amigos visuales (ej. ['escalator', 'beach', 'sunny', 'happy', 'party']).",
     )
     broll_descripcion: str = Field(description="Descripción visual concreta del plano ideal, en español.")
-    texto_pantalla: str = Field(description="2-4 palabras clave en MAYÚSCULAS, o cadena vacía.")
+    puesto: Optional[int] = Field(
+        default=None,
+        description="Número del puesto del ranking (N..1) si esta escena inicia o pertenece a ese puesto; null en intro/outro.",
+    )
+    puesto_titulo: Optional[str] = Field(
+        default=None,
+        description="Título corto en MAYÚSCULAS (2-5 palabras, sin el #N) cuando esta escena INICIA un puesto del ranking; null en las demás escenas.",
+    )
+    texto_pantalla: str = Field(description="Cartel de puesto '#N: TITULO DEL PUESTO' en la primera escena de cada puesto, o cadena vacía.")
     sfx: Sfx
     music_mood: Mood
     short_id: Optional[int] = Field(default=None, description="1, 2 o 3 si la escena pertenece a un Short; null si no.")
@@ -60,6 +69,133 @@ class Guion(BaseModel):
     titulo_trabajo: str
     resumen: str
     escenas: list[Escena]
+
+
+def extraer_top_n(tema: str, minutos: float = 8.5) -> int:
+    """Extrae N si el tema especifica 'Top N' / 'Los N...'; si no, calcula N según la duración."""
+    if tema:
+        m = re.search(r"\b(?:top|ranking|los|las|mis)\s+(\d{1,2})\b", tema, re.IGNORECASE)
+        if not m:
+            m = re.search(r"^\s*(\d{1,2})\s+[a-záéíóúñ]{3,}", tema, re.IGNORECASE)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 15:
+                return n
+    if minutos <= 2.5:
+        return 3
+    if minutos <= 9.5:
+        return 5
+    return max(3, min(10, round(minutos / 1.6)))
+
+
+def _formatear_lista_puestos(top_n: int) -> str:
+    puestos = [f"#{i}" for i in range(top_n, 0, -1)]
+    if len(puestos) <= 1:
+        return puestos[0] if puestos else "#1"
+    return ", ".join(puestos[:-1]) + f" y {puestos[-1]}"
+
+
+def _limpiar_titulo_puesto(texto: str, r: int) -> str:
+    """Extrae un título corto en MAYÚSCULAS limpio sin el prefijo TOP #N."""
+    limpio = re.sub(r"^(?:TOP\s*)?(?:PUESTO\s*)?#?\s*\d+\s*[:\-\.\–—]*\s*", "", (texto or "").strip(), flags=re.IGNORECASE)
+    limpio = re.sub(r"\s+", " ", limpio).strip(" .,:;-—\"'«»¡!¿?")
+    if not limpio:
+        return f"PUESTO {r}"
+    palabras = limpio.split()
+    if len(palabras) > 6:
+        limpio = " ".join(palabras[:5])
+    return limpio.upper()
+
+
+def asegurar_tarjetas_top(guion_obj: Guion, top_n: int) -> Guion:
+    """Garantiza que cada puesto del ranking (#N..#1) tenga una escena de apertura con puesto, puesto_titulo y texto_pantalla '#N: TITULO'."""
+    escenas = guion_obj.escenas
+    if not escenas or top_n < 1:
+        return guion_obj
+
+    # Ajustar top_n si hay menos escenas que puestos
+    max_puestos_posibles = max(1, len(escenas))
+    top_n_efectivo = min(top_n, max_puestos_posibles)
+    puestos_esperados = list(range(top_n_efectivo, 0, -1))
+
+    # Paso 1: Detectar inicios de puesto explícitos (por esc.puesto, texto_pantalla o capitulo)
+    inicio_por_puesto: dict[int, int] = {}  # puesto -> índice en escenas
+    for idx, esc in enumerate(escenas):
+        candidato_r: Optional[int] = None
+        if esc.puesto and 1 <= esc.puesto <= top_n_efectivo:
+            candidato_r = esc.puesto
+        else:
+            for fuente in (esc.texto_pantalla or "", esc.capitulo or ""):
+                m = re.search(r"(?:#|top\s*#?|puesto\s*#?)\s*(\d{1,2})\b", fuente, re.IGNORECASE)
+                if m:
+                    val = int(m.group(1))
+                    if 1 <= val <= top_n_efectivo:
+                        candidato_r = val
+                        break
+        if candidato_r is not None and candidato_r not in inicio_por_puesto:
+            inicio_por_puesto[candidato_r] = idx
+
+    # Paso 2: Intentar detectar en la locución ("puesto 3", "número 2", "#1") si faltan puestos
+    if len(inicio_por_puesto) < len(puestos_esperados):
+        usados_idx = set(inicio_por_puesto.values())
+        for r in puestos_esperados:
+            if r in inicio_por_puesto:
+                continue
+            patron_voz = re.compile(
+                rf"(?:#\s*{r}\b|\b(?:puesto|n[úu]mero|top|lugar|caso)\s+{r}\b)",
+                re.IGNORECASE,
+            )
+            for idx, esc in enumerate(escenas):
+                if idx in usados_idx:
+                    continue
+                if patron_voz.search(esc.voz or ""):
+                    inicio_por_puesto[r] = idx
+                    usados_idx.add(idx)
+                    break
+
+    # Paso 3: Si aún falta algún puesto, asignarlo determinísticamente en orden regresivo (#N..#1)
+    if len(inicio_por_puesto) < len(puestos_esperados):
+        # Reservamos la escena 0 como gancho si hay suficientes escenas, y la última como cierre si hay margen
+        ini_cuerpo = 1 if len(escenas) > top_n_efectivo + 1 else 0
+        fin_cuerpo = len(escenas) - 1 if len(escenas) > top_n_efectivo + 2 else len(escenas)
+        indices_cuerpo = list(range(ini_cuerpo, fin_cuerpo))
+        if len(indices_cuerpo) < top_n_efectivo:
+            indices_cuerpo = list(range(len(escenas)))
+
+        # Reasignación ordenada para preservar cuenta regresiva estricta (#N -> ... -> #1)
+        paso = len(indices_cuerpo) / float(top_n_efectivo)
+        inicio_por_puesto.clear()
+        for i, r in enumerate(puestos_esperados):
+            idx_elegido = indices_cuerpo[min(len(indices_cuerpo) - 1, int(round(i * paso)))]
+            # Evitar colisión si dos caen en el mismo índice
+            while idx_elegido in inicio_por_puesto.values() and idx_elegido + 1 < len(escenas):
+                idx_elegido += 1
+            inicio_por_puesto[r] = idx_elegido
+
+    # Paso 4: Normalizar campos en las escenas de inicio de cada puesto y limpiar duplicados
+    idx_a_puesto_inicio = {idx: r for r, idx in inicio_por_puesto.items()}
+    puesto_actual: Optional[int] = None
+    for idx, esc in enumerate(escenas):
+        if idx in idx_a_puesto_inicio:
+            r = idx_a_puesto_inicio[idx]
+            puesto_actual = r
+            esc.puesto = r
+            fuente_titulo = esc.puesto_titulo or esc.texto_pantalla or esc.capitulo or esc.voz
+            titulo_limpio = _limpiar_titulo_puesto(fuente_titulo, r)
+            esc.puesto_titulo = titulo_limpio
+            esc.texto_pantalla = f"#{r}: {titulo_limpio}"
+            if esc.sfx == "ninguno":
+                esc.sfx = "whoosh"
+        else:
+            if esc.acto == "cta":
+                puesto_actual = None
+            esc.puesto = puesto_actual
+            esc.puesto_titulo = None
+            # Si una escena secundaria repetía un cartel #N, lo vaciamos para no duplicar la tarjeta del puesto
+            if esc.texto_pantalla and re.search(r"(?:#|top\s*#?|puesto\s*#?)\s*\d+", esc.texto_pantalla, re.IGNORECASE):
+                esc.texto_pantalla = ""
+
+    return guion_obj
 
 
 def _cliente() -> genai.Client:
@@ -73,23 +209,25 @@ def _cliente() -> genai.Client:
 
 # ------------------------------------------------------------------ paso A
 PROMPT_INVESTIGACION = """Eres guionista y creador de contenido de YouTube especializado en rankings y TOPS DINÁMICOS
-(estilo 'Los 5 casos más impresionantes...', 'Top 5 tecnologías que cambiarán el mundo', etc.), en español latino neutro.
+(estilo 'Los casos más impresionantes...', 'Top tecnologías que cambiarán el mundo', etc.), en español latino neutro.
 
 TEMA: {tema}
 
-1. Investiga y selecciona un TOP 5 (o Top 7) riguroso, fascinante y de alto impacto sobre este tema.
-2. Organiza los puestos en cuenta regresiva desde el puesto menos conocido/curioso (#5) hasta el número 1 indiscutible (#1).
+1. Investiga y selecciona un TOP {top_n} riguroso, fascinante y de alto impacto sobre este tema.
+2. Organiza los puestos en cuenta regresiva desde el puesto #{top_n} hasta el número 1 indiscutible (#1): {lista_puestos}.
 3. Escribe un BORRADOR NARRATIVO de aproximadamente {palabras} palabras con esta estructura:
-   - Gancho inicial breve (10 segundos): Plantea el misterio o la pregunta central del ranking.
-   - Puestos #5, #4, #3, #2 y #1: Cada puesto debe explicar claramente de qué se trata, por qué merece su posición y un dato sorprendente.
-   - Conclusión / Pregunta al espectador (10 segundos) para generar comentarios.
+   - Gancho inicial breve: Plantea el misterio o la pregunta central del ranking.
+   - Puestos {lista_puestos}: Cada puesto debe explicar claramente de qué se trata, por qué merece su posición y un dato sorprendente.
+   - Conclusión / Pregunta al espectador para generar comentarios.
    - Frases ágiles, sin relleno, vocabulario directo y entretenido.
 """
 
 
 def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
     palabras = int(round(minutos * config.PALABRAS_POR_MIN))
-    prompt = PROMPT_INVESTIGACION.format(tema=tema, palabras=palabras)
+    top_n = extraer_top_n(tema, minutos)
+    lista_puestos = _formatear_lista_puestos(top_n)
+    prompt = PROMPT_INVESTIGACION.format(tema=tema, palabras=palabras, top_n=top_n, lista_puestos=lista_puestos)
     client = _cliente()
     fuentes: list[dict] = []
 
@@ -133,15 +271,20 @@ def investigar(tema: str, minutos: float) -> tuple[str, list[dict]]:
 
 
 # ------------------------------------------------------------------ paso B
-PROMPT_ESTRUCTURA = """Convierte la investigación en un GUION DE MONTAJE para un video formato TOP / RANKING.
+PROMPT_ESTRUCTURA = """Convierte la investigación en un GUION DE MONTAJE para un video formato TOP / RANKING (TOP {top_n}).
 
 REGLAS ESTRICTAS DE FORMATO TOP Y DURACIÓN:
 - Presupuesto estricto de locución: el video dura {minutos} minuto(s), lo que equivale a **{palabras} palabras en total** (rango permitido: entre {palabras_min} y {palabras_max} palabras sumando el campo "voz" de TODAS las escenas, calculado a {ppm} palabras/minuto considerando las pausas de puntuación).
 - Genera aproximadamente {n_escenas} escenas en total. Cada escena dura entre 5 y 8 segundos: el campo "voz" debe tener ENTRE 12 y {max_pal} palabras. ¡NO excedas las {palabras_max} palabras totales!
-- Organiza los puestos en cuenta regresiva (#5, #4, #3, #2, #1).
-- En la PRIMERA escena de cada puesto, pon en "texto_pantalla" el cartel del puesto en mayúsculas (ej: "#5: NOMBRE DEL CASO").
-  En las demás escenas de ese mismo puesto, pon "texto_pantalla" en blanco ("").
-- NO agregues subtítulos de la narración en "texto_pantalla". Solo el título del puesto.
+- El ranking tiene exactamente {top_n} puestos en cuenta regresiva ({lista_puestos}).
+- Tarjetas TOP #N obligatorias:
+  * En la PRIMERA escena de cada puesto ({lista_puestos}), asigna:
+    - `puesto`: el número entero del puesto (ej. {top_n}, ..., 1).
+    - `puesto_titulo`: título corto en MAYÚSCULAS de 2 a 5 palabras sin el número (ej. "EL INCIDENTE DEL PASO DYATLOV").
+    - `texto_pantalla`: el cartel con formato exacto `"#N: TITULO DEL PUESTO"` en mayúsculas (ej. `"#{top_n}: EL INCIDENTE DYATLOV"`).
+  * En las demás escenas de continuación de ese mismo puesto, pon `puesto` con el número del puesto actual, `puesto_titulo` en null y `texto_pantalla` en blanco (`""`).
+  * En la escena de gancho inicial o conclusión/CTA, pon `puesto` en null y `puesto_titulo` en null.
+- NO agregues subtítulos de la narración en "texto_pantalla". Solo el cartel de inicio de cada puesto.
 - Pose del Host (campo `pose`, sugerida por escena según la emoción y el mood):
   * Poses disponibles: `'explicando'` (manos abiertas conversando), `'pensativo'` (mano en la barbilla reflexionando), `'sorprendido'` (impacto/asombro), `'esceptico'` (brazos cruzados analítico), `'duda'` (encogiendo hombros ante una incógnita), `'senalando'` (apuntando al dato o puesto), `'aprobando'` (pulgares arriba, solo cierres positivos), `'dinero'` (billetes en mano).
   * Cuando se introduce un nuevo puesto (#N): `'senalando'` o `'sorprendido'`.
@@ -167,8 +310,10 @@ def estructurar(material: str, minutos: float, tema: str = "") -> Guion:
     palabras = int(round(minutos * config.PALABRAS_POR_MIN))
     palabras_min = int(round(minutos * 135))
     palabras_max = int(round(minutos * 150))
-    # ~16 palabras por escena (~6.7s por escena incluyendo micropausas)
-    n_escenas = max(5, round(palabras / 16.0))
+    top_n = extraer_top_n(tema, minutos)
+    lista_puestos = _formatear_lista_puestos(top_n)
+    # ~16 palabras por escena (~6.7s por escena incluyendo micropausas), garantizando al menos top_n + 2 escenas
+    n_escenas = max(top_n + 2, round(palabras / 16.0))
     prompt = PROMPT_ESTRUCTURA.format(
         minutos=minutos,
         palabras=palabras,
@@ -177,11 +322,14 @@ def estructurar(material: str, minutos: float, tema: str = "") -> Guion:
         ppm=config.PALABRAS_POR_MIN,
         n_escenas=n_escenas,
         max_pal=config.MAX_PALABRAS_ESCENA,
+        top_n=top_n,
+        lista_puestos=lista_puestos,
         material=material,
     )
     prompt += (
-        f"\n\nATENCIÓN OBLIGATORIA DE DURACIÓN: El video completo debe durar {minutos} min ({int(minutos * 60)} s). "
-        f"Ajusta la cantidad de escenas (~{n_escenas} escenas) y la longitud de cada locución para que la SUMA TOTAL "
+        f"\n\nATENCIÓN OBLIGATORIA DE DURACIÓN Y TOP {top_n}: El video completo debe durar {minutos} min ({int(minutos * 60)} s) "
+        f"e incluir TODOS los puestos en cuenta regresiva ({lista_puestos}) con su tarjeta `texto_pantalla` (\"#N: TITULO\") "
+        f"al inicio de cada puesto. Ajusta la cantidad de escenas (~{n_escenas} escenas) y la longitud de cada locución para que la SUMA TOTAL "
         f"de palabras de todas las escenas quede estrictamente entre {palabras_min} y {palabras_max} palabras (objetivo: {palabras})."
     )
     client = _cliente()
@@ -206,6 +354,7 @@ def estructurar(material: str, minutos: float, tema: str = "") -> Guion:
                     elif esc.broll_queries_en and not esc.broll_query_en:
                         esc.broll_query_en = esc.broll_queries_en[0]
                     esc.pose = normalizar_pose(esc.pose, mood=esc.music_mood, tema=tema, texto_voz=esc.voz)  # type: ignore[assignment]
+                asegurar_tarjetas_top(guion_obj, top_n=top_n)
                 return guion_obj
             except Exception as e:
                 print(f"⚠️ Reintento {intento+1}/3 con modelo {mod} tras aviso: {e}")
