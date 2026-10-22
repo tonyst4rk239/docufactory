@@ -1,4 +1,7 @@
 .venv/
+node_modules/
+thumbnail_studio/node_modules/
+thumbnail_studio/dist/
 __pycache__/
 *.pyc
 .env

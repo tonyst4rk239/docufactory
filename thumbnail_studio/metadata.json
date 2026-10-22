@@ -1,0 +1,6 @@
+{
+  "name": "Cinematic YouTube Thumbnail Studio - Documental de Investigación",
+  "description": "Creador y editor profesional de miniaturas cinematográficas 16:9 para documentales de YouTube con estética de thriller psicológico y alto CTR.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

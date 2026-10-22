@@ -102,5 +102,14 @@ Verificadas con el archivo de investigación del proyecto.
 #Documental #Misterio #Historia #Investigacion
 """
     (carpeta / "paquete_youtube.txt").write_text(descripcion_final, "utf-8")
+    
+    # Auto-generar miniaturas oficiales 1080p y 720p en carpeta publicacion/
+    try:
+        from .miniatura import generar_miniatura_proyecto
+        res_mini = generar_miniatura_proyecto(p)
+        print(f"🖼️  Miniaturas de alto CTR generadas: {res_mini['1080p'].name} y {res_mini['720p'].name}")
+    except Exception as e:
+        print(f"⚠️ Aviso: No se pudo auto-generar miniatura: {e}")
+
     p.marcar("publicacion", "ok")
     print(f"📄 Paquete de publicación guardado en {carpeta / 'paquete_youtube.txt'}")

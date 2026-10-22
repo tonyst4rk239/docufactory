@@ -7,6 +7,7 @@ Uso:
   python make_video.py preparar <slug>                         # sintetiza voz + descarga B-roll y genera revisión visual
   python make_video.py revisar <slug> [opciones]               # aprueba, rechaza o reemplaza clips (Lente)
   python make_video.py renderizar <slug> [--forzar]            # montaje y render final (exige aprobación)
+  python make_video.py miniatura <slug> [--titulo "TEXTO"]     # genera miniaturas de alto CTR (1080p y 720p)
   python make_video.py continuar <slug>                        # corre voz, broll, stems y renders duales de corrido
   python make_video.py auto "tema" [--minutos 1.0]             # pipeline continuo sin pausas
   python make_video.py doblar <slug> --audio <wav>             # re-sincroniza con locución humana
@@ -427,6 +428,26 @@ def cmd_auto(args) -> int:
     return cmd_continuar(args)
 
 
+def cmd_miniatura(args) -> int:
+    from src.miniatura import generar_miniatura_proyecto
+
+    p = Proyecto.cargar(args.slug)
+    print(f"\n🎨 Generando paquete de miniaturas A/B para: '{p.tema}' ({p.datos['slug']})...\n")
+    res = generar_miniatura_proyecto(
+        p=p,
+        titulo_custom=getattr(args, "titulo", None),
+        pose_custom=getattr(args, "host", "alerta"),
+        fondo_custom=Path(args.fondo) if getattr(args, "fondo", None) else None,
+    )
+    print("=" * 65)
+    print("🏆 ¡MINIATURAS GENERADAS CON ÉXITO!")
+    print(f"🖼️  1080p Full HD: {res['1080p']}")
+    print(f"🖼️  720p Estándar: {res['720p']}")
+    print(f"📄 Metadatos JSON: {p.ruta('publicacion', 'miniatura.json')}")
+    print("=" * 65)
+    return 0
+
+
 def cmd_estado(args) -> int:
     from src.revision import formatear_resumen_revision
 
@@ -484,6 +505,13 @@ def main() -> int:
     rnd.add_argument("--forzar", action="store_true", help="Fuerza el render ignorando escenas pendientes o rechazadas")
     rnd.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
     rnd.set_defaults(fn=cmd_renderizar)
+
+    mini = sub.add_parser("miniatura", help="Genera miniaturas 16:9 de alto CTR para el proyecto (1080p y 720p)")
+    mini.add_argument("slug", help="Slug del proyecto")
+    mini.add_argument("--titulo", default=None, help="Texto viral en amarillo de alto impacto (opcional)")
+    mini.add_argument("--host", default="alerta", help="Pose del host (alerta, pensativo, etc.)")
+    mini.add_argument("--fondo", default=None, help="Ruta a imagen de fondo personalizada")
+    mini.set_defaults(fn=cmd_miniatura)
 
     c = sub.add_parser("continuar")
     c.add_argument("slug")
