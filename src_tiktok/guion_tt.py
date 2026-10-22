@@ -47,6 +47,7 @@ class EscenaTikTok(BaseModel):
     music_mood: str = Field(default="misterio", description="misterio, tension, epica, curiosidad, calma")
     puesto: Optional[int] = Field(default=None)
     puesto_titulo: Optional[str] = Field(default=None)
+    clips_fuente: list[dict] = Field(default_factory=list, description="Fragmentos reales {url, inicio, duracion, credito} priorizados sobre el stock")
 
     @model_validator(mode="before")
     @classmethod
@@ -155,6 +156,7 @@ def guion_general_a_tiktok(g: Guion) -> GuionTikTok:
                 music_mood=e.music_mood,
                 puesto=e.puesto,
                 puesto_titulo=e.puesto_titulo,
+                clips_fuente=[c.model_dump() if hasattr(c, "model_dump") else dict(c) for c in (getattr(e, "clips_fuente", None) or [])],
             )
         )
     hook = g.hook or (escenas_tt[0].voz if escenas_tt else g.titulo_trabajo)
