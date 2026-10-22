@@ -158,7 +158,7 @@ def render_clip_vertical(
                 f"crop=1080:1920,setsar=1,fps=30,format=yuv420p[ov]"
             )
             filtros.append(
-                f"{v_actual}[ov]blend=all_mode={blend_mode}:all_opacity={opacity:.2f}:shortest=1,format=yuv420p[bg_ov]"
+                f"{v_actual}[ov]blend=c0_mode={blend_mode}:c0_opacity={opacity:.2f}:c1_mode=normal:c1_opacity=0:c2_mode=normal:c2_opacity=0:shortest=1,format=yuv420p[bg_ov]"
             )
             v_actual = "[bg_ov]"
 

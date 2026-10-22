@@ -430,7 +430,7 @@ def renderizar_clip_visual(
                 f"crop=1920:1080,setsar=1,fps=30,format=yuv420p[ov]"
             )
             filtros.append(
-                f"{v_previo}[ov]blend=all_mode={blend_mode}:all_opacity={opacity:.2f}:shortest=1,format=yuv420p[bg_ov]"
+                f"{v_previo}[ov]blend=c0_mode={blend_mode}:c0_opacity={opacity:.2f}:c1_mode=normal:c1_opacity=0:c2_mode=normal:c2_opacity=0:shortest=1,format=yuv420p[bg_ov]"
             )
             v_previo = "[bg_ov]"
 
