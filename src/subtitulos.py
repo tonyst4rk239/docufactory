@@ -54,6 +54,9 @@ def generar_srt(p: Proyecto, duraciones: dict[int, float]) -> Path:
     return ruta_srt
 
 
+from .layout import ajustar_fuente, caja_host, partir_en_lineas, zona_texto
+
+
 def generar_tarjetas_ass(p: Proyecto, duraciones: dict[int, float]) -> Path:
     """Genera archivo de subtítulos estilizados .ass garantizando una tarjeta TOP #N (~2x más grande,
     con fondo semitransparente y delay de 0.35s post-glitch) al inicio de cada puesto."""
@@ -81,7 +84,7 @@ def generar_tarjetas_ass(p: Proyecto, duraciones: dict[int, float]) -> Path:
 ScriptType: v4.00+
 PlayResX: 1920
 PlayResY: 1080
-WrapStyle: 0
+WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
@@ -90,6 +93,7 @@ Style: TopCentered,Arial Black,{fs_top},&H00FFFFFF,&H00000000,{back_colour},{bac
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"""
 
+    sin_host = bool(p.datos.get("sin_host", False))
     eventos = []
     tiempo_actual = 0.0
     puestos_emitidos: set[int] = set()
@@ -124,23 +128,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
         ini_str = _formatear_tiempo_ass(t_evento_ini)
         fin_str = _formatear_tiempo_ass(t_evento_fin)
 
+        # Zona segura: lado opuesto al host, franja superior, con margen (nunca encima del avatar)
+        host_box = caja_host(esc.pose, esc.host_lado, bool(esc.host_visible) and not sin_host)
+        zona = zona_texto(host_box)
+        centro_x = int(zona.x + zona.w / 2)
+        y_top = 70
+
         if numero is not None:
             puestos_emitidos.add(numero)
             titulo_ass = titulo.replace("{", "(").replace("}", ")")
-            fs_tit_efectivo = fs_titulo if len(titulo_ass) <= 18 else max(92, int(fs_titulo * 0.84))
+            fs_t = ajustar_fuente([f"  TOP #{numero}  "], fs_top, zona.w)
+            partes = [
+                f"{{\\fs{fs_t}\\3c{back_colour}\\4c{back_colour}\\c&H0000E6FF&}}  TOP #{numero}  "
+            ]
             if titulo_ass:
-                texto_formateado = (
-                    f"{{\\fs{fs_top}\\3c{back_colour}\\4c{back_colour}\\c&H0000E6FF&}}  TOP #{numero}  \\N"
-                    f"{{\\fs{fs_tit_efectivo}\\c&H00FFFFFF&}}  {titulo_ass}  "
-                )
-            else:
-                texto_formateado = f"{{\\fs{fs_top}\\3c{back_colour}\\4c{back_colour}\\c&H0000E6FF&}}  TOP #{numero}  "
+                lineas = partir_en_lineas(titulo_ass, fs_titulo, zona.w)
+                fs_l = ajustar_fuente([f"  {l}  " for l in lineas], fs_titulo, zona.w)
+                partes += [f"{{\\fs{fs_l}\\c&H00FFFFFF&}}  {l}  " for l in lineas]
+            texto_formateado = "\\N".join(partes)
         else:
             txt_ass = txt.replace("{", "(").replace("}", ")")
-            texto_formateado = f"{{\\fs{fs_titulo}\\3c{back_colour}\\4c{back_colour}\\c&H0000E6FF&}}  {txt_ass}  "
+            lineas = partir_en_lineas(txt_ass, fs_titulo, zona.w)
+            fs_l = ajustar_fuente([f"  {l}  " for l in lineas], fs_titulo, zona.w)
+            texto_formateado = "\\N".join(
+                f"{{\\fs{fs_l}\\3c{back_colour}\\4c{back_colour}\\c&H0000E6FF&}}  {l}  " for l in lineas
+            )
 
         eventos.append(
-            f"Dialogue: 1,{ini_str},{fin_str},TopCentered,,0,0,0,,{{\\fad(200,220)}}{texto_formateado}"
+            f"Dialogue: 1,{ini_str},{fin_str},TopCentered,,0,0,0,,{{\\an8\\pos({centro_x},{y_top})\\fad(200,220)}}{texto_formateado}"
         )
 
     contenido_final = contenido_base + "\n" + "\n".join(eventos) + "\n"

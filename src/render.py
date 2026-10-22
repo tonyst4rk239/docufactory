@@ -429,8 +429,9 @@ def renderizar_clip_visual(
         host_idx = num_inputs
         num_inputs += 1
         inputs += ["-loop", "1", "-i", str(sprite_a_usar)]
-        pos_x = "1920-w-80" if esc.host_lado == "derecha" else "80"
-        filtros.append(f"[{host_idx}:v]scale=-1:750[host]")
+        from .layout import HOST_ALTO, HOST_MARGEN_X
+        pos_x = f"1920-w-{HOST_MARGEN_X}" if esc.host_lado == "derecha" else f"{HOST_MARGEN_X}"
+        filtros.append(f"[{host_idx}:v]scale=-1:{HOST_ALTO}[host]")
         filtros.append(f"{v_previo}[host]overlay={pos_x}:1080-h:shortest=1[v_con_host]")
         v_previo = "[v_con_host]"
 
