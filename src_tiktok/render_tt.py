@@ -129,6 +129,7 @@ def render_clip_vertical(
     destino: Path,
     idx_escena: int = 1,
     cfg: dict | None = None,
+    tono: str = "misterio",
 ):
     """Convierte cualquier video en 1080x1920 con zoom punch en palabras clave, grado de color oscuro,
     viñeta, grano ligero FFmpeg, overlay screen y host en esquina inferior."""
@@ -139,7 +140,7 @@ def render_clip_vertical(
 
     # 1. Fondo 9:16 con Zoom Punch + Grado de Color + Viñeta + Grano
     zp_expr = construir_filtro_zoom_punch_vertical(duracion, 1080, 1920, 30, cfg=cfg)
-    look_expr = construir_filtro_color_textura(mood="misterio", formato="vertical_9_16", es_inicio_top=(idx_escena == 1), cfg=cfg)
+    look_expr = construir_filtro_color_textura(mood="misterio", formato="vertical_9_16", es_inicio_top=(idx_escena == 1), cfg=cfg, tono=tono)
     filtros = [f"[0:v]{zp_expr},{look_expr}[bg_graded]"]
     v_actual = "[bg_graded]"
 
@@ -213,9 +214,11 @@ def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, f
 
         out_v = temp_dir / f"clip_v_{esc.id:03d}.mp4"
         from src.host_anim import obtener_sprite
-        host_png = obtener_sprite(esc.pose_host, boca="cerrada", mood="misterio", tema=p.tema, texto_voz=esc.voz)
+        usar_avatar = bool(getattr(guion, "usar_avatar", True)) and not p.datos.get("sin_host", False)
+        host_png = obtener_sprite(esc.pose_host, boca="cerrada", mood="misterio", tema=p.tema, texto_voz=esc.voz) if usar_avatar else None
 
-        render_clip_vertical(ffmpeg, broll_f, host_png, dur, out_v, idx_escena=esc.id, cfg=cfg)
+        render_clip_vertical(ffmpeg, broll_f, host_png, dur, out_v, idx_escena=esc.id, cfg=cfg,
+                             tono=getattr(guion, "tono", "misterio") or "misterio")
         clips_v.append(out_v)
 
     concat_txt = temp_dir / "concat_vertical.txt"

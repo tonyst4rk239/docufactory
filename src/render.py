@@ -313,6 +313,7 @@ def renderizar_clip_visual(
     es_cierre: bool = False,
     es_inicio_top: bool = False,
     cfg: Optional[dict] = None,
+    tono: str = "misterio",
 ) -> bool:
     """Renderiza el corte visual en 1080p con:
     - Grado de color por mood (curves/eq/colorbalance)
@@ -405,6 +406,7 @@ def renderizar_clip_visual(
         formato="horizontal_16_9",
         es_inicio_top=es_inicio_top,
         cfg=cfg,
+        tono=tono,
     )
     filtros.append(f"[bg_raw]{filtro_look}[bg_graded]")
     v_previo = "[bg_graded]"
@@ -609,6 +611,7 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
                 es_cierre=es_cierre,
                 es_inicio_top=es_top,
                 cfg=cfg,
+                tono=getattr(guion, "tono", "misterio") or "misterio",
             )
         clips_visuales.append(clip_path)
 

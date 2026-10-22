@@ -142,3 +142,43 @@ defecto 3-5 s). Los clips reales ocupan las primeras tomas; el resto rota entre 
 Pixabay), buscados con consultas cortas de 2-3 palabras derivadas de `broll_queries_en`.
 Manifiesto por escena: `b_roll/escena_XXX_tomas.json`. La revisión genera un cuadro por toma
 (`b_roll/revision/escena_XXX_toma_NN.jpg`) y lo lista en `revision.json -> tomas[]`.
+
+## Campos opcionales de estilo (raíz del guion) — v2026-10
+
+Todos son opcionales y retrocompatibles: un guion sin ellos se ve exactamente como antes (tono `misterio`, con avatar).
+
+| Campo | Tipo | Default | Valores |
+|---|---|---|---|
+| `tono` | string | `"misterio"` | `misterio`, `polemica`, `investigacion`, `humor`, `epico`, `drama`, `curiosidad`, `terror` |
+| `usar_avatar` | bool | `true` | `false` = el host NO aparece en ninguna escena del video ni en la miniatura (ignora `host_visible`) |
+| `miniatura` | objeto | `null` | `{titulo, subtitulo, sello, pose, layout}`, todos opcionales |
+
+**`tono`** define el grado de color del render (16:9 y 9:16) y el estilo de la miniatura (paletas, sellos, poses, fuentes):
+- `misterio`: grado oscuro/desaturado actual por `music_mood` (sin cambios).
+- `terror`: más oscuro y frío, sombras aplastadas.
+- `polemica`: saturado y cálido/rojo, con punch.
+- `investigacion`: neutro frío, saturación natural.
+- `humor`: brillante y muy saturado.
+- `epico`: alto contraste teal-orange.
+- `drama`: cálido suave, contraste medio.
+- `curiosidad`: limpio, saturación ligeramente alta.
+Fuera de `misterio`/`terror` los clips reales no se desaturan. Se aceptan alias con acento (`polémica`, `investigación`, `épico`). Un valor desconocido es error de validación.
+
+**`miniatura`**, por campo:
+- `titulo`: texto de la miniatura. Se recomiendan de 2 a 6 palabras. Si falta, sale de `youtube_metadata.titulos[0]` acortado a 40 caracteres o menos.
+- `subtitulo`: banner pequeño bajo el título. Vacío = sin banner.
+- `sello`: `REC` | `CONFIDENCIAL` | `POLÉMICA` | `EXCLUSIVA` | `ninguno` (o texto libre corto).
+- `pose`: una pose de `assets/host` (`aprobando`, `dinero`, `duda`, `esceptico`, `explicando`, `pensativo`, `senalando`, `sorprendido`).
+- `layout`: `avatar_derecha` | `avatar_izquierda` | `avatar_centro` | `sin_avatar`.
+
+Lo que no se especifica se elige de forma determinista con el slug como semilla y el tono, evitando repetir el layout y la posición de título, la paleta, la fuente, el sello y la pose de la miniatura anterior (`proyectos/_miniaturas_historial.json`). El texto nunca cubre al avatar.
+
+```json
+{
+  "titulo_trabajo": "La Granja VIP: la temporada donde nadie cuida a nadie",
+  "tono": "polemica",
+  "usar_avatar": true,
+  "miniatura": {"titulo": "CLORO EN LA COMIDA", "sello": "POLÉMICA", "layout": "avatar_izquierda", "pose": "esceptico"},
+  "escenas": [ ... ]
+}
+```

@@ -80,6 +80,9 @@ class GuionTikTok(BaseModel):
     mood: str = "misterio"
     hook: str = ""
     bucle_loop_frase: str = ""
+    tono: str = "misterio"
+    usar_avatar: bool = True
+    miniatura: Optional[dict] = None
     escenas: list[EscenaTikTok]
 
     @model_validator(mode="before")
@@ -88,6 +91,14 @@ class GuionTikTok(BaseModel):
         if not isinstance(data, dict):
             return data
         d = dict(data)
+        from src.guion import TONOS_VALIDOS, _ALIAS_TONO
+        t_raw = str(d.get("tono") or "misterio").strip().lower()
+        t_raw = _ALIAS_TONO.get(t_raw, t_raw)
+        if t_raw not in TONOS_VALIDOS:
+            raise ValueError(f"tono inválido '{t_raw}'. Usa uno de: {', '.join(TONOS_VALIDOS)}")
+        d["tono"] = t_raw
+        if isinstance(d.get("usar_avatar"), str):
+            d["usar_avatar"] = d["usar_avatar"].strip().lower() not in ("false", "no", "0")
         if not d.get("titulo") and d.get("titulo_trabajo"):
             d["titulo"] = d["titulo_trabajo"]
         escenas = d.get("escenas") or []
@@ -153,6 +164,9 @@ def guion_general_a_tiktok(g: Guion) -> GuionTikTok:
         mood=g.mood,
         hook=hook,
         bucle_loop_frase=bucle,
+        tono=getattr(g, "tono", "misterio"),
+        usar_avatar=getattr(g, "usar_avatar", True),
+        miniatura=g.miniatura.model_dump() if getattr(g, "miniatura", None) else None,
         escenas=escenas_tt,
     )
 

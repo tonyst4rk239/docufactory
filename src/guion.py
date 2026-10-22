@@ -217,6 +217,21 @@ class Escena(BaseModel):
         return d
 
 
+TONOS_VALIDOS = ("misterio", "polemica", "investigacion", "humor", "epico", "drama", "curiosidad", "terror")
+_ALIAS_TONO = {"polémica": "polemica", "investigación": "investigacion", "épico": "epico", "epica": "epico",
+               "comedia": "humor", "miedo": "terror", "misterioso": "misterio"}
+LAYOUTS_MINIATURA = ("avatar_derecha", "avatar_izquierda", "avatar_centro", "sin_avatar")
+
+
+class MiniaturaGuion(BaseModel):
+    """Overrides opcionales de la miniatura (cualquier campo vacío se decide automáticamente)."""
+    titulo: Optional[str] = None
+    subtitulo: Optional[str] = None
+    sello: Optional[str] = Field(default=None, description="REC | CONFIDENCIAL | POLÉMICA | EXCLUSIVA | ninguno | texto libre")
+    pose: Optional[str] = None
+    layout: Optional[str] = Field(default=None, description="avatar_derecha | avatar_izquierda | avatar_centro | sin_avatar")
+
+
 class Guion(BaseModel):
     titulo_trabajo: str = Field(description="Título principal del proyecto o video.")
     formato: FormatoVideo = Field(default="16:9", description="Formato de salida: '16:9' (Documental) o '9:16' (Reel/Short).")
@@ -230,7 +245,17 @@ class Guion(BaseModel):
     hook: Optional[str] = Field(default=None, description="Frase gancho inicial (especialmente útil en 9:16).")
     bucle_loop_frase: Optional[str] = Field(default=None, description="Frase de cierre para bucle en 9:16.")
     fuentes_video: list[dict] = Field(default_factory=list, description="Lista opcional de videos fuente del episodio (url, credito, descripcion).")
+    tono: str = Field(default="misterio", description="Tono visual: " + ", ".join(TONOS_VALIDOS))
+    usar_avatar: bool = Field(default=True, description="Si False, el host no aparece ni en el video ni en la miniatura.")
+    miniatura: Optional[MiniaturaGuion] = None
     escenas: list[Escena]
+
+    @model_validator(mode="after")
+    def _aplicar_usar_avatar(self) -> "Guion":
+        if not self.usar_avatar:
+            for e in self.escenas:
+                e.host_visible = False
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -238,6 +263,16 @@ class Guion(BaseModel):
         if not isinstance(data, dict):
             return data
         d = dict(data)
+        t_raw = str(d.get("tono") or "misterio").strip().lower()
+        t_raw = _ALIAS_TONO.get(t_raw, t_raw)
+        if t_raw not in TONOS_VALIDOS:
+            raise ValueError(f"tono inválido '{t_raw}'. Usa uno de: {', '.join(TONOS_VALIDOS)}")
+        d["tono"] = t_raw
+        if isinstance(d.get("usar_avatar"), str):
+            d["usar_avatar"] = d["usar_avatar"].strip().lower() not in ("false", "no", "0")
+        mini = d.get("miniatura")
+        if isinstance(mini, dict) and mini.get("layout") and mini["layout"] not in LAYOUTS_MINIATURA:
+            raise ValueError(f"miniatura.layout inválido '{mini['layout']}'. Usa: {', '.join(LAYOUTS_MINIATURA)}")
         if not d.get("titulo_trabajo") and d.get("titulo"):
             d["titulo_trabajo"] = d["titulo"]
         if not d.get("youtube_metadata") and d.get("metadatos_youtube"):

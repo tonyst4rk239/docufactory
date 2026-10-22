@@ -436,8 +436,12 @@ def cmd_miniatura(args) -> int:
     res = generar_miniatura_proyecto(
         p=p,
         titulo_custom=getattr(args, "titulo", None),
-        pose_custom=getattr(args, "host", "alerta"),
+        pose_custom=getattr(args, "host", None),
         fondo_custom=Path(args.fondo) if getattr(args, "fondo", None) else None,
+        subtitulo_custom=getattr(args, "subtitulo", None),
+        sello_custom=getattr(args, "stamp", None),
+        layout_custom=getattr(args, "layout", None),
+        tono_custom=getattr(args, "tono", None),
     )
     print("=" * 65)
     print("🏆 ¡MINIATURAS GENERADAS CON ÉXITO!")
@@ -509,8 +513,12 @@ def main() -> int:
     mini = sub.add_parser("miniatura", help="Genera miniaturas 16:9 de alto CTR para el proyecto (1080p y 720p)")
     mini.add_argument("slug", help="Slug del proyecto")
     mini.add_argument("--titulo", default=None, help="Texto viral en amarillo de alto impacto (opcional)")
-    mini.add_argument("--host", default="alerta", help="Pose del host (alerta, pensativo, etc.)")
+    mini.add_argument("--host", default=None, help="Pose del host (si se omite, se elige según tono)")
     mini.add_argument("--fondo", default=None, help="Ruta a imagen de fondo personalizada")
+    mini.add_argument("--subtitulo", default=None, help="Banner inferior")
+    mini.add_argument("--stamp", default=None, help="Sello: REC, CONFIDENCIAL, POLÉMICA, EXCLUSIVA o ninguno")
+    mini.add_argument("--layout", default=None, choices=["avatar_derecha", "avatar_izquierda", "avatar_centro", "sin_avatar"])
+    mini.add_argument("--tono", default=None, help="Fuerza un tono (si no, usa guion.tono)")
     mini.set_defaults(fn=cmd_miniatura)
 
     c = sub.add_parser("continuar")

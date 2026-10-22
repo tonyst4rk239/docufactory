@@ -85,6 +85,26 @@ DEFAULT_EDICION_CONFIG: dict[str, Any] = {
             },
         },
     },
+    # Grado por TONO del video (guion.tono). "misterio" = None -> se usa el grado por mood de siempre (idéntico).
+    "color_grading_tonos": {
+        "terror": {"saturation": 0.78, "contrast": 1.12, "brightness": -0.03,
+                   "colorbalance": "rs=-0.04:gs=0.02:bs=0.06:rm=-0.03:gm=0.02:bm=0.04",
+                   "curves": "master='0/0 0.20/0.16 0.50/0.47 0.85/0.84 1/0.97'"},
+        "polemica": {"saturation": 1.22, "contrast": 1.12, "brightness": 0.01,
+                     "colorbalance": "rs=0.07:gs=0.00:bs=-0.05:rm=0.06:gm=-0.01:bm=-0.05:rh=0.04"},
+        "humor": {"saturation": 1.30, "contrast": 1.06, "brightness": 0.05,
+                  "colorbalance": "rs=0.03:gs=0.02:bs=-0.02:rm=0.03:gm=0.02:bm=-0.02",
+                  "curves": "master='0/0.03 0.25/0.30 0.50/0.56 0.85/0.90 1/1'"},
+        "investigacion": {"saturation": 1.00, "contrast": 1.06, "brightness": 0.01,
+                          "colorbalance": "rs=-0.02:gs=0.00:bs=0.04:rm=-0.02:bm=0.03"},
+        "epico": {"saturation": 1.15, "contrast": 1.18, "brightness": -0.01,
+                  "colorbalance": "rs=-0.06:gs=0.00:bs=0.08:rh=0.08:gh=0.02:bh=-0.08"},
+        "drama": {"saturation": 0.96, "contrast": 1.10, "brightness": -0.01,
+                  "colorbalance": "rs=0.02:bs=0.02:rm=0.04:gm=0.00:bm=-0.02:rh=0.03",
+                  "curves": "master='0/0.02 0.25/0.23 0.50/0.50 0.85/0.87 1/1'"},
+        "curiosidad": {"saturation": 1.08, "contrast": 1.08, "brightness": 0.01,
+                       "colorbalance": "rs=-0.02:bs=0.04:rm=0.03:bm=0.02:rh=0.04"},
+    },
     "textura_visual": {
         "vignette": {"enabled": True, "angle": "PI/5"},
         "film_grain_ffmpeg": {"enabled": True, "alls": 8, "allf": "t"},
@@ -242,6 +262,7 @@ def construir_filtro_color_textura(
     formato: str = "horizontal_16_9",
     es_inicio_top: bool = False,
     cfg: Optional[dict[str, Any]] = None,
+    tono: Optional[str] = None,
 ) -> str:
     """Construye la cadena de filtros FFmpeg para grado de color por mood, viñeta, grano y flash/glitch en Top #N."""
     cfg = cfg or cargar_config_edicion()
@@ -253,6 +274,9 @@ def construir_filtro_color_textura(
     if fmt_cfg.get("color_grading", True) and cg_cfg.get("enabled", True):
         moods_map = cg_cfg.get("moods", {})
         m_cfg = moods_map.get(mood) or moods_map.get("misterio") or {}
+        tonos_map = cfg.get("color_grading_tonos") or DEFAULT_EDICION_CONFIG["color_grading_tonos"]
+        if tono and tono != "misterio" and tono in tonos_map:
+            m_cfg = tonos_map[tono]
         sat = float(m_cfg.get("saturation", 0.88))
         con = float(m_cfg.get("contrast", 1.05))
         bri = float(m_cfg.get("brightness", 0.00))
