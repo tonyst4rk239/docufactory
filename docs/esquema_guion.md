@@ -182,3 +182,29 @@ Lo que no se especifica se elige de forma determinista con el slug como semilla 
   "escenas": [ ... ]
 }
 ```
+
+### `estilo_color` (opcional, override del grado de color)
+
+Por defecto el grado de color sale de `tono` (16:9 y 9:16 usan el mismo mapa, `GRADOS_POR_TONO` en `src/edicion.py`):
+
+| tono | look |
+|---|---|
+| `misterio` | frío, desaturado (sat 0.85) |
+| `terror` | frío, oscuro, desaturado (sat 0.72) |
+| `humor` | vivo, cálido y luminoso (sat 1.35) |
+| `curiosidad` | vivo y brillante (sat 1.25) |
+| `polemica` | rojo cálido de alto contraste (sat 1.25, contraste 1.20) |
+| `epico` | teal & orange con contraste (sat 1.18) |
+| `drama` | cálido suave (sat 1.02) |
+| `investigacion` | neutro y limpio (sat 1.05) |
+
+Pluma puede forzar otro grado con `estilo_color`:
+
+- **string**: nombre de un tono (`"epico"`) o alias (`frio`, `desaturado`, `oscuro`, `vivo`, `calido`, `brillante`, `rojo`, `teal_orange`, `neutro`, `limpio`).
+- **objeto**: `{"base": "humor", "saturation": 1.4, "contrast": 1.1, "brightness": 0.02, "colorbalance": "rm=0.05", "curves": "master='0/0 1/1'"}`. Todas las llaves son opcionales; `base` elige el preset y el resto lo sobrescribe (valores de los filtros FFmpeg `eq`, `colorbalance` y `curves`).
+
+Prioridad: `estilo_color` > `tono` > `misterio`.
+
+```json
+{ "tono": "curiosidad", "estilo_color": { "base": "curiosidad", "saturation": 1.35 } }
+```

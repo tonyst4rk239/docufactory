@@ -314,6 +314,7 @@ def renderizar_clip_visual(
     es_inicio_top: bool = False,
     cfg: Optional[dict] = None,
     tono: str = "misterio",
+    estilo_color=None,
 ) -> bool:
     """Renderiza el corte visual en 1080p con:
     - Grado de color por mood (curves/eq/colorbalance)
@@ -407,6 +408,7 @@ def renderizar_clip_visual(
         es_inicio_top=es_inicio_top,
         cfg=cfg,
         tono=tono,
+        estilo_color=estilo_color,
     )
     filtros.append(f"[bg_raw]{filtro_look}[bg_graded]")
     v_previo = "[bg_graded]"
@@ -432,7 +434,7 @@ def renderizar_clip_visual(
                 f"crop=1920:1080,setsar=1,fps=30,format=yuv420p[ov]"
             )
             filtros.append(
-                f"{v_previo}[ov]blend=c0_mode={blend_mode}:c0_opacity={opacity:.2f}:c1_mode=normal:c1_opacity=0:c2_mode=normal:c2_opacity=0:shortest=1,format=yuv420p[bg_ov]"
+                f"{v_previo}[ov]blend=c0_mode={blend_mode}:c0_opacity={opacity:.2f}:c1_mode=normal:c1_opacity=1:c2_mode=normal:c2_opacity=1:shortest=1,format=yuv420p[bg_ov]"
             )
             v_previo = "[bg_ov]"
 
@@ -612,6 +614,7 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
                 es_inicio_top=es_top,
                 cfg=cfg,
                 tono=getattr(guion, "tono", "misterio") or "misterio",
+                estilo_color=getattr(guion, "estilo_color", None),
             )
         clips_visuales.append(clip_path)
 

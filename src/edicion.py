@@ -20,6 +20,69 @@ import yaml
 
 from . import config
 
+# ---------------------------------------------------------------------------
+# Mapa tono -> grado de color (fuente única para 16:9 y 9:16)
+# ---------------------------------------------------------------------------
+GRADOS_POR_TONO: dict[str, dict[str, Any]] = {
+    # Frío y desaturado
+    "misterio": {"saturation": 0.85, "contrast": 1.06, "brightness": -0.01,
+                 "colorbalance": "rs=-0.03:gs=0.00:bs=0.05:rm=-0.02:gm=0.00:bm=0.03",
+                 "curves": "master='0/0.02 0.18/0.18 0.50/0.50 0.85/0.86 1/1'"},
+    "terror": {"saturation": 0.72, "contrast": 1.14, "brightness": -0.03,
+               "colorbalance": "rs=-0.05:gs=0.02:bs=0.07:rm=-0.03:gm=0.02:bm=0.04",
+               "curves": "master='0/0 0.20/0.16 0.50/0.47 0.85/0.84 1/0.97'"},
+    # Vivos, cálidos / luminosos (saturación >= 1.1)
+    "humor": {"saturation": 1.35, "contrast": 1.06, "brightness": 0.05,
+              "colorbalance": "rs=0.04:gs=0.02:bs=-0.03:rm=0.04:gm=0.02:bm=-0.03",
+              "curves": "master='0/0.03 0.25/0.30 0.50/0.56 0.85/0.90 1/1'"},
+    "curiosidad": {"saturation": 1.25, "contrast": 1.08, "brightness": 0.03,
+                   "colorbalance": "rs=0.02:gs=0.01:bs=-0.01:rm=0.03:gm=0.01:bm=-0.02:rh=0.03",
+                   "curves": "master='0/0.02 0.25/0.28 0.50/0.53 0.85/0.88 1/1'"},
+    # Rojo cálido de alto contraste
+    "polemica": {"saturation": 1.25, "contrast": 1.20, "brightness": 0.00,
+                 "colorbalance": "rs=0.08:gs=-0.01:bs=-0.06:rm=0.08:gm=-0.02:bm=-0.06:rh=0.05"},
+    # Teal & orange con contraste
+    "epico": {"saturation": 1.18, "contrast": 1.18, "brightness": -0.01,
+              "colorbalance": "rs=-0.08:gs=0.00:bs=0.10:rm=0.03:bm=-0.03:rh=0.10:gh=0.03:bh=-0.10"},
+    # Cálido suave
+    "drama": {"saturation": 1.02, "contrast": 1.04, "brightness": 0.01,
+              "colorbalance": "rs=0.03:bs=-0.01:rm=0.05:gm=0.01:bm=-0.03:rh=0.03",
+              "curves": "master='0/0.03 0.25/0.26 0.50/0.51 0.85/0.86 1/0.98'"},
+    # Neutro y limpio
+    "investigacion": {"saturation": 1.05, "contrast": 1.05, "brightness": 0.01, "colorbalance": ""},
+}
+
+# Alias aceptados en guion.estilo_color (además de los nombres de tono)
+ALIAS_ESTILO_COLOR: dict[str, str] = {
+    "frio": "misterio", "desaturado": "misterio", "oscuro": "terror",
+    "vivo": "humor", "calido": "drama", "brillante": "curiosidad",
+    "rojo": "polemica", "teal_orange": "epico", "neutro": "investigacion", "limpio": "investigacion",
+}
+
+
+def resolver_grado(tono: Optional[str] = None, estilo_color: Any = None,
+                   tonos_map: Optional[dict[str, dict[str, Any]]] = None) -> dict[str, Any]:
+    """Devuelve el grado {saturation, contrast, brightness, colorbalance, curves}.
+    Prioridad: guion.estilo_color (nombre de preset o dict con overrides) > guion.tono > misterio."""
+    tonos_map = tonos_map or GRADOS_POR_TONO
+    base_nombre = (tono or "misterio").strip().lower()
+    grado = dict(tonos_map.get(base_nombre) or GRADOS_POR_TONO.get(base_nombre) or GRADOS_POR_TONO["misterio"])
+    if isinstance(estilo_color, str) and estilo_color.strip():
+        n = estilo_color.strip().lower()
+        n = ALIAS_ESTILO_COLOR.get(n, n)
+        if n in tonos_map or n in GRADOS_POR_TONO:
+            grado = dict(tonos_map.get(n) or GRADOS_POR_TONO[n])
+    elif isinstance(estilo_color, dict):
+        n = str(estilo_color.get("base") or "").strip().lower()
+        n = ALIAS_ESTILO_COLOR.get(n, n)
+        if n in tonos_map or n in GRADOS_POR_TONO:
+            grado = dict(tonos_map.get(n) or GRADOS_POR_TONO[n])
+        for k in ("saturation", "contrast", "brightness", "colorbalance", "curves"):
+            if k in estilo_color and estilo_color[k] is not None:
+                grado[k] = estilo_color[k]
+    return grado
+
+
 DEFAULT_EDICION_CONFIG: dict[str, Any] = {
     "formatos": {
         "horizontal_16_9": {
@@ -85,26 +148,9 @@ DEFAULT_EDICION_CONFIG: dict[str, Any] = {
             },
         },
     },
-    # Grado por TONO del video (guion.tono). "misterio" = None -> se usa el grado por mood de siempre (idéntico).
-    "color_grading_tonos": {
-        "terror": {"saturation": 0.78, "contrast": 1.12, "brightness": -0.03,
-                   "colorbalance": "rs=-0.04:gs=0.02:bs=0.06:rm=-0.03:gm=0.02:bm=0.04",
-                   "curves": "master='0/0 0.20/0.16 0.50/0.47 0.85/0.84 1/0.97'"},
-        "polemica": {"saturation": 1.22, "contrast": 1.12, "brightness": 0.01,
-                     "colorbalance": "rs=0.07:gs=0.00:bs=-0.05:rm=0.06:gm=-0.01:bm=-0.05:rh=0.04"},
-        "humor": {"saturation": 1.30, "contrast": 1.06, "brightness": 0.05,
-                  "colorbalance": "rs=0.03:gs=0.02:bs=-0.02:rm=0.03:gm=0.02:bm=-0.02",
-                  "curves": "master='0/0.03 0.25/0.30 0.50/0.56 0.85/0.90 1/1'"},
-        "investigacion": {"saturation": 1.00, "contrast": 1.06, "brightness": 0.01,
-                          "colorbalance": "rs=-0.02:gs=0.00:bs=0.04:rm=-0.02:bm=0.03"},
-        "epico": {"saturation": 1.15, "contrast": 1.18, "brightness": -0.01,
-                  "colorbalance": "rs=-0.06:gs=0.00:bs=0.08:rh=0.08:gh=0.02:bh=-0.08"},
-        "drama": {"saturation": 0.96, "contrast": 1.10, "brightness": -0.01,
-                  "colorbalance": "rs=0.02:bs=0.02:rm=0.04:gm=0.00:bm=-0.02:rh=0.03",
-                  "curves": "master='0/0.02 0.25/0.23 0.50/0.50 0.85/0.87 1/1'"},
-        "curiosidad": {"saturation": 1.08, "contrast": 1.08, "brightness": 0.01,
-                       "colorbalance": "rs=-0.02:bs=0.04:rm=0.03:bm=0.02:rh=0.04"},
-    },
+    # Grado por TONO del video (guion.tono; Pluma puede forzar otro con guion.estilo_color).
+    # Mapa ÚNICO usado por 16:9 (src/render.py) y 9:16 (src_tiktok/render_tt.py).
+    "color_grading_tonos": GRADOS_POR_TONO,
     "textura_visual": {
         "vignette": {"enabled": True, "angle": "PI/5"},
         "film_grain_ffmpeg": {"enabled": True, "alls": 8, "allf": "t"},
@@ -263,6 +309,7 @@ def construir_filtro_color_textura(
     es_inicio_top: bool = False,
     cfg: Optional[dict[str, Any]] = None,
     tono: Optional[str] = None,
+    estilo_color: Any = None,
 ) -> str:
     """Construye la cadena de filtros FFmpeg para grado de color por mood, viñeta, grano y flash/glitch en Top #N."""
     cfg = cfg or cargar_config_edicion()
@@ -272,11 +319,9 @@ def construir_filtro_color_textura(
     # 1. Grado de color por mood (eq + colorbalance + curves para preservar sombras)
     cg_cfg = cfg.get("color_grading", {})
     if fmt_cfg.get("color_grading", True) and cg_cfg.get("enabled", True):
-        moods_map = cg_cfg.get("moods", {})
-        m_cfg = moods_map.get(mood) or moods_map.get("misterio") or {}
-        tonos_map = cfg.get("color_grading_tonos") or DEFAULT_EDICION_CONFIG["color_grading_tonos"]
-        if tono and tono != "misterio" and tono in tonos_map:
-            m_cfg = tonos_map[tono]
+        # El TONO del guion manda (antes 'misterio' caía al grado por mood, siempre frío/desaturado)
+        tonos_map = {**GRADOS_POR_TONO, **(cfg.get("color_grading_tonos") or {})}
+        m_cfg = resolver_grado(tono, estilo_color, tonos_map)
         sat = float(m_cfg.get("saturation", 0.88))
         con = float(m_cfg.get("contrast", 1.05))
         bri = float(m_cfg.get("brightness", 0.00))

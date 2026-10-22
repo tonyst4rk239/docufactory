@@ -7,7 +7,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Union, Any, Optional
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field, model_validator
@@ -82,6 +82,7 @@ class GuionTikTok(BaseModel):
     hook: str = ""
     bucle_loop_frase: str = ""
     tono: str = "misterio"
+    estilo_color: Optional[Union[str, dict]] = None
     usar_avatar: bool = True
     miniatura: Optional[dict] = None
     escenas: list[EscenaTikTok]
@@ -167,6 +168,7 @@ def guion_general_a_tiktok(g: Guion) -> GuionTikTok:
         hook=hook,
         bucle_loop_frase=bucle,
         tono=getattr(g, "tono", "misterio"),
+        estilo_color=getattr(g, "estilo_color", None),
         usar_avatar=getattr(g, "usar_avatar", True),
         miniatura=g.miniatura.model_dump() if getattr(g, "miniatura", None) else None,
         escenas=escenas_tt,

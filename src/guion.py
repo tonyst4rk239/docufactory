@@ -9,7 +9,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Union, Any, Literal, Optional
 
 from google import genai
 from google.genai import types
@@ -246,6 +246,7 @@ class Guion(BaseModel):
     bucle_loop_frase: Optional[str] = Field(default=None, description="Frase de cierre para bucle en 9:16.")
     fuentes_video: list[dict] = Field(default_factory=list, description="Lista opcional de videos fuente del episodio (url, credito, descripcion).")
     tono: str = Field(default="misterio", description="Tono visual: " + ", ".join(TONOS_VALIDOS))
+    estilo_color: Optional[Union[str, dict]] = Field(default=None, description="Override opcional del grado de color: nombre de tono/alias o dict {base, saturation, contrast, brightness, colorbalance, curves}.")
     usar_avatar: bool = Field(default=True, description="Si False, el host no aparece ni en el video ni en la miniatura.")
     miniatura: Optional[MiniaturaGuion] = None
     escenas: list[Escena]

@@ -130,6 +130,7 @@ def render_clip_vertical(
     idx_escena: int = 1,
     cfg: dict | None = None,
     tono: str = "misterio",
+    estilo_color=None,
 ):
     """Convierte cualquier video en 1080x1920 con zoom punch en palabras clave, grado de color oscuro,
     viñeta, grano ligero FFmpeg, overlay screen y host en esquina inferior."""
@@ -140,7 +141,7 @@ def render_clip_vertical(
 
     # 1. Fondo 9:16 con Zoom Punch + Grado de Color + Viñeta + Grano
     zp_expr = construir_filtro_zoom_punch_vertical(duracion, 1080, 1920, 30, cfg=cfg)
-    look_expr = construir_filtro_color_textura(mood="misterio", formato="vertical_9_16", es_inicio_top=(idx_escena == 1), cfg=cfg, tono=tono)
+    look_expr = construir_filtro_color_textura(mood="misterio", formato="vertical_9_16", es_inicio_top=(idx_escena == 1), cfg=cfg, tono=tono, estilo_color=estilo_color)
     filtros = [f"[0:v]{zp_expr},{look_expr}[bg_graded]"]
     v_actual = "[bg_graded]"
 
@@ -159,7 +160,7 @@ def render_clip_vertical(
                 f"crop=1080:1920,setsar=1,fps=30,format=yuv420p[ov]"
             )
             filtros.append(
-                f"{v_actual}[ov]blend=c0_mode={blend_mode}:c0_opacity={opacity:.2f}:c1_mode=normal:c1_opacity=0:c2_mode=normal:c2_opacity=0:shortest=1,format=yuv420p[bg_ov]"
+                f"{v_actual}[ov]blend=c0_mode={blend_mode}:c0_opacity={opacity:.2f}:c1_mode=normal:c1_opacity=1:c2_mode=normal:c2_opacity=1:shortest=1,format=yuv420p[bg_ov]"
             )
             v_actual = "[bg_ov]"
 
@@ -218,7 +219,8 @@ def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, f
         host_png = obtener_sprite(esc.pose_host, boca="cerrada", mood="misterio", tema=p.tema, texto_voz=esc.voz) if usar_avatar else None
 
         render_clip_vertical(ffmpeg, broll_f, host_png, dur, out_v, idx_escena=esc.id, cfg=cfg,
-                             tono=getattr(guion, "tono", "misterio") or "misterio")
+                             tono=getattr(guion, "tono", "misterio") or "misterio",
+                             estilo_color=getattr(guion, "estilo_color", None))
         clips_v.append(out_v)
 
     concat_txt = temp_dir / "concat_vertical.txt"
