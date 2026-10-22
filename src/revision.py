@@ -457,10 +457,16 @@ def reemplazar_clip(
             youtube_disponible,
         )
         consultas_usadas = [consulta.strip()]
+        _usados: set[str] = set()
+        try:
+            _rev = json.loads(p.ruta("b_roll", "revision.json").read_text(encoding="utf-8"))
+            _usados = {it.get("url") for it in _rev if it.get("escena") != escena_id and it.get("url")}
+        except Exception:
+            pass
         queries = [consulta.strip(), f"{consulta.strip()} cinematic dark"]
 
         # Buscar en Pexels
-        cands_pex = _buscar_candidatos_pexels_scoring(queries, avoid=set(), mood="misterio", clips_usados=set())
+        cands_pex = _buscar_candidatos_pexels_scoring(queries, avoid=set(), mood="misterio", clips_usados=_usados)
         for c in cands_pex:
             if descargar_archivo_directo(c["url"], destino_clip):
                 exito = True
@@ -470,7 +476,7 @@ def reemplazar_clip(
 
         # Buscar en Pixabay
         if not exito:
-            cands_pix = _buscar_candidatos_pixabay_scoring(queries, avoid=set(), mood="misterio", clips_usados=set())
+            cands_pix = _buscar_candidatos_pixabay_scoring(queries, avoid=set(), mood="misterio", clips_usados=_usados)
             for c in cands_pix:
                 if descargar_archivo_directo(c["url"], destino_clip):
                     exito = True

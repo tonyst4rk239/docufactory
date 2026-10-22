@@ -1249,3 +1249,29 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
     p.marcar("broll", "ok")
     print(f"✨ Clips de video listos y organizados. Reporte de rechazos: {ruta_rep}")
     return creditos
+
+
+def _escena_busqueda(queries: list[str], avoid: set[str], mood: str):
+    """Escena mínima para puntuar candidatos en reemplazos de Lente (revisar --consulta)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        music_mood=mood if mood in _MOOD_DEFAULTS else "misterio",
+        broll_query_en=queries[0] if queries else "",
+        broll_queries_en=list(queries),
+        broll_mood_keywords=["dark", "night", "cinematic"],
+        broll_avoid_keywords=sorted(avoid | {"snow", "winter", "sunny", "beach", "crowd", "science fiction", "futuristic"}),
+    )
+
+
+def _buscar_candidatos_scoring(buscador, fuente: str, queries, avoid=None, mood="misterio", clips_usados=None, dur_objetivo=10.0):
+    esc = _escena_busqueda(list(queries), set(avoid or ()), mood)
+    cands = [dict(c, fuente=c.get("fuente") or fuente) for c in buscador(list(queries))]
+    return _puntuar_y_filtrar_candidatos(cands, esc, dur_objetivo, set(clips_usados or ()))
+
+
+def _buscar_candidatos_pexels_scoring(queries, avoid=None, mood="misterio", clips_usados=None):
+    return _buscar_candidatos_scoring(_buscar_candidatos_pexels, "Pexels", queries, avoid, mood, clips_usados)
+
+
+def _buscar_candidatos_pixabay_scoring(queries, avoid=None, mood="misterio", clips_usados=None):
+    return _buscar_candidatos_scoring(_buscar_candidatos_pixabay, "Pixabay", queries, avoid, mood, clips_usados)
