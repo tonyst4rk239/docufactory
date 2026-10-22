@@ -81,6 +81,8 @@ def cmd_subir(args) -> int:
         return 1
 
     titulo = args.titulo or video_path.stem.replace("_", " ").title()
+    if getattr(args, "texto_archivo", None):
+        args.texto = Path(args.texto_archivo).read_text(encoding="utf-8")
     texto = args.texto or (titulo + " #fyp #parati #viral #codigoocultotv #Shorts")
     plataformas = [p.lower() for p in args.plataformas]
 
@@ -96,7 +98,12 @@ def cmd_subir(args) -> int:
     # 1. YouTube Shorts
     if "yt" in plataformas or "youtube" in plataformas:
         try:
-            subir_youtube_short(video_path, titulo=titulo, descripcion=texto, privacidad=args.privacidad)
+            tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+            res = subir_youtube_short(
+                video_path, titulo=titulo, descripcion=texto, tags=tags,
+                privacidad=args.privacidad, es_short=not args.largo, miniatura=args.miniatura,
+            )
+            print(f"YT_RESULT video_id={res['video_id']} url={res['url']} privacidad={res['privacidad']} miniatura_ok={res['miniatura_ok']}")
         except Exception as e:
             print(f"❌ Error subiendo a YouTube: {e}")
             errores.append("YouTube")
@@ -148,6 +155,10 @@ def main():
     p_sub.add_argument("--titulo", default=None, help="Título del video")
     p_sub.add_argument("--texto", default=None, help="Texto/Copy y hashtags")
     p_sub.add_argument("--privacidad", default="public", choices=["public", "private", "unlisted"], help="Privacidad (YouTube)")
+    p_sub.add_argument("--largo", action="store_true", help="Video largo 16:9 (no Short, sin #Shorts)")
+    p_sub.add_argument("--miniatura", default=None, help="Ruta a miniatura personalizada (YouTube)")
+    p_sub.add_argument("--tags", default=None, help="Tags separados por coma (YouTube)")
+    p_sub.add_argument("--texto-archivo", dest="texto_archivo", default=None, help="Leer descripción desde archivo")
     p_sub.add_argument("--headless", action="store_true", help="Ejecutar TikTok en segundo plano sin ventana visual")
     p_sub.set_defaults(func=cmd_subir)
 

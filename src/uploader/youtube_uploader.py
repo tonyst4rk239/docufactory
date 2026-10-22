@@ -51,7 +51,10 @@ def subir_youtube_short(
     descripcion: str,
     tags: Optional[list[str]] = None,
     privacidad: str = "public",
-    hora_programada_iso: Optional[str] = None
+    hora_programada_iso: Optional[str] = None,
+    es_short: bool = True,
+    miniatura: Optional[Path | str] = None,
+    categoria: str = "24",
 ) -> dict:
     """Sube un video a YouTube como Short y retorna el ID y enlace."""
     path = Path(video_path)
@@ -64,7 +67,7 @@ def subir_youtube_short(
     estado_privacidad = "private" if hora_programada_iso else privacidad
 
     # Asegurar hashtag #Shorts para garantizar indexación
-    if "#Shorts" not in descripcion and "#shorts" not in descripcion:
+    if es_short and "#Shorts" not in descripcion and "#shorts" not in descripcion:
         descripcion += "\n\n#Shorts #Viral"
 
     body = {
@@ -72,7 +75,7 @@ def subir_youtube_short(
             "title": titulo[:100],
             "description": descripcion,
             "tags": tags or ["Shorts", "Viral", "CodigoOcultoTV"],
-            "categoryId": "24"  # 24 = Entertainment
+            "categoryId": categoria  # 24 = Entertainment
         },
         "status": {
             "privacyStatus": estado_privacidad,
@@ -86,7 +89,7 @@ def subir_youtube_short(
     media = MediaFileUpload(str(path), mimetype="video/mp4", resumable=True, chunksize=1024 * 1024 * 5)
     peticion = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
 
-    print(f"🚀 Subiendo Short a YouTube: '{titulo}'...")
+    print(f"🚀 Subiendo a YouTube: '{titulo}'...")
     respuesta = None
     while respuesta is None:
         estado, respuesta = peticion.next_chunk()
@@ -94,12 +97,26 @@ def subir_youtube_short(
             print(f"   ⏳ Progreso de subida: {int(estado.progress() * 100)}%")
 
     video_id = respuesta.get("id")
-    enlace = f"https://youtube.com/shorts/{video_id}"
-    print(f"✅ ¡Video subido exitosamente a YouTube Shorts!\n   🔗 Enlace: {enlace}")
+    enlace = f"https://youtube.com/shorts/{video_id}" if es_short else f"https://youtu.be/{video_id}"
+    print(f"✅ ¡Video subido a YouTube ({estado_privacidad})!\n   🔗 Enlace: {enlace}")
+
+    miniatura_ok = None
+    if miniatura and Path(miniatura).exists():
+        try:
+            youtube.thumbnails().set(
+                videoId=video_id, media_body=MediaFileUpload(str(miniatura))
+            ).execute()
+            miniatura_ok = True
+            print("🖼️  Miniatura personalizada aplicada.")
+        except Exception as e:
+            miniatura_ok = False
+            print(f"⚠️ No se pudo aplicar la miniatura (¿canal sin verificar?): {e}")
 
     return {
         "plataforma": "YouTube",
         "video_id": video_id,
         "url": enlace,
+        "privacidad": estado_privacidad,
+        "miniatura_ok": miniatura_ok,
         "respuesta": respuesta
     }
