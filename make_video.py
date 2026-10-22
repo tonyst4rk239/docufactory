@@ -181,6 +181,15 @@ def cmd_importar(args) -> int:
         return 0
 
     args.slug = p.datos["slug"]
+    if not getattr(args, "auto", False):
+        rc = cmd_preparar(args)
+        print(
+            "\n⏸️  PAUSA DE REVISIÓN (Lente): no se renderizó el video.\n"
+            f"   Revisa b_roll/revision/ y luego: python make_video.py revisar {args.slug} --aprobar all\n"
+            f"   Render final: python make_video.py renderizar {args.slug}\n"
+            "   (Usa 'importar <guion.json> --auto' para correr todo sin pausa.)"
+        )
+        return rc
     return cmd_continuar(args)
 
 
@@ -438,7 +447,7 @@ def main() -> int:
 
     sub.add_parser("doctor").set_defaults(fn=cmd_doctor)
 
-    imp = sub.add_parser("importar", help="Valida e importa un guion JSON externo (Pluma) y ejecuta el pipeline")
+    imp = sub.add_parser("importar", help="Valida e importa un guion JSON externo (Pluma), prepara voz/B-roll y pausa para revisión (--auto: todo)")
     imp.add_argument("guion_json", help="Ruta al archivo .json del guion")
     imp.add_argument("--auto", action="store_true", help="Ejecuta todo el pipeline de corrido (voz, broll y render)")
     imp.add_argument("--solo-guion", action="store_true", help="Solo valida el JSON y genera guion_doblaje.md sin renderizar")
