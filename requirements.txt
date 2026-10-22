@@ -9,3 +9,5 @@ pyyaml>=6.0
 faster-whisper>=1.0
 rembg[cpu]>=2.0.50
 pytrends>=4.9.2
+edge-tts>=6.1
+yt-dlp>=2024.1
