@@ -21,6 +21,7 @@ from .estado import Proyecto
 def _buscar_fuente_bold(tamano: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Encuentra una tipografía sans-serif gruesa compatible en Windows y Linux."""
     candidatos = [
+        str(config.ASSETS / "fonts" / "bold.ttf"),
         # Windows
         "C:/Windows/Fonts/impact.ttf",
         "C:/Windows/Fonts/arialbd.ttf",
@@ -186,9 +187,12 @@ def _cargar_y_componer_host(
                 ruta_host = cand
                 break
         if not ruta_host:
-            cand_alerta = config.HOST_DIR / "alerta_cerrada.png"
-            if cand_alerta.exists():
-                ruta_host = cand_alerta
+            # Poses alias/fallback (p. ej. "alerta" no existe como sprite)
+            for pose_alt in ("sorprendido", "senalando", "explicando", "pensativo"):
+                cand_alt = config.HOST_DIR / f"{pose_alt}_cerrada.png"
+                if cand_alt.exists():
+                    ruta_host = cand_alt
+                    break
 
     if not ruta_host or not ruta_host.exists():
         return
@@ -196,6 +200,9 @@ def _cargar_y_componer_host(
     try:
         with Image.open(ruta_host) as h_im:
             h_im = h_im.convert("RGBA")
+            bbox_alpha = h_im.split()[3].getbbox()
+            if bbox_alpha:
+                h_im = h_im.crop(bbox_alpha)  # quitar margen transparente
             if flip:
                 h_im = h_im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
 
@@ -312,15 +319,27 @@ def generar_miniatura(
     font_tam_titulo = int(h * 0.155)  # ~165px en 1080p
     font_titulo = _buscar_fuente_bold(font_tam_titulo)
 
-    # Separar en máximo 2 líneas si es muy largo
-    palabras = titulo.strip().split()
-    lineas_titulo = []
-    if len(palabras) > 3:
-        mitad = len(palabras) // 2
-        lineas_titulo.append(" ".join(palabras[:mitad]))
-        lineas_titulo.append(" ".join(palabras[mitad:]))
+    # Ajustar a 2 líneas máx. y al ancho libre (lado izquierdo, sin tapar al host)
+    ancho_max = int(w * 0.50)
+    palabras = titulo.strip().upper().split()
+
+    def _ancho(txt: str, f: Any) -> int:
+        b = f.getbbox(txt)
+        return b[2] - b[0]
+
+    if len(palabras) > 1 and _ancho(" ".join(palabras), font_titulo) > ancho_max:
+        mejor = None
+        for corte in range(1, len(palabras)):
+            l1, l2 = " ".join(palabras[:corte]), " ".join(palabras[corte:])
+            m = max(_ancho(l1, font_titulo), _ancho(l2, font_titulo))
+            if mejor is None or m < mejor[0]:
+                mejor = (m, [l1, l2])
+        lineas_titulo = mejor[1]
     else:
-        lineas_titulo.append(titulo.strip())
+        lineas_titulo = [" ".join(palabras)]
+    while font_tam_titulo > 40 and max(_ancho(l, font_titulo) for l in lineas_titulo) > ancho_max:
+        font_tam_titulo = int(font_tam_titulo * 0.92)
+        font_titulo = _buscar_fuente_bold(font_tam_titulo)
 
     start_y = int(h * 0.18)
     for idx_l, linea in enumerate(lineas_titulo):
@@ -418,6 +437,9 @@ def generar_miniatura_proyecto(
     titulo_miniatura = titulo
     if len(titulo_miniatura) > 32 and ":" in titulo_miniatura:
         titulo_miniatura = titulo_miniatura.split(":")[-1].strip()
+    if len(titulo_miniatura) > 32:
+        # Miniatura: máx. 4 palabras para que sea legible en el feed
+        titulo_miniatura = " ".join(titulo_miniatura.replace("…", " ").split()[:4]).rstrip(",.;")
 
     # Buscar mejor fondo de B-roll si no se especificó uno
     fondo = fondo_custom
