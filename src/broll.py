@@ -729,6 +729,7 @@ def _buscar_candidatos_pixabay(queries: list[str], per_page: int = 12) -> list[d
                     "id": vid_id,
                     "key": f"pixabay:{vid_id}",
                     "url": opt["url"],
+                    "url_medium": (vids.get("medium") or {}).get("url") or opt["url"],
                     "tags": str(h.get("tags") or ""),
                     "duracion": float(h.get("duration") or 0.0),
                     "query_origen": q,
@@ -1243,9 +1244,34 @@ def etapa_broll(p: Proyecto, duraciones: Optional[dict[int, float]] = None) -> l
             "consultas_usadas": list(getattr(esc, "broll_queries_en", []) or [query_yt]),
         })
 
+    # 5. Tomas: clips reales (clips_fuente) + B-roll libre distinto para cortes de 3-5 s
+    from .tomas import cfg_tomas, preparar_tomas_escena
+    if cfg_tomas().get("enabled", True):
+        print("🎞️  Preparando tomas por escena (clips reales EVIDENCIA + rotación de B-roll 3-5 s)...")
+        por_id = {c["escena"]: c for c in creditos}
+        for esc in guion.escenas:
+            dur_audio = (duraciones or {}).get(esc.id)
+            if not dur_audio:
+                wav_path = p.ruta("voz", f"escena_{esc.id:03d}.wav")
+                dur_audio = obtener_duracion_wav(wav_path) if wav_path.exists() else 10.0
+            cred = por_id.get(esc.id, {})
+            try:
+                man = preparar_tomas_escena(
+                    p, esc, float(dur_audio), clips_usados, rechazos_por_escena.setdefault(esc.id, []),
+                    url_principal=cred.get("url", ""),
+                )
+                cred["tomas"] = man.get("tomas", [])
+                cred["cortes"] = man.get("cortes", [])
+                n_real = sum(1 for t in cred["tomas"] if t.get("fuente") == "real")
+                print(f"   Escena {esc.id}: {len(man.get('cortes', []))} cortes | {n_real} reales | "
+                      f"{len(cred['tomas']) - n_real} clips libres distintos")
+            except Exception as e:
+                print(f"   ⚠️ Escena {esc.id}: no se pudieron preparar tomas ({e}); se usará el clip único.")
+
     p.ruta("b_roll", "creditos.json").write_text(json.dumps(creditos, ensure_ascii=False, indent=2), "utf-8")
     ruta_rep = p.ruta("b_roll", "broll_reporte.md")
     generar_reporte_broll_md(ruta_rep, p.tema, "16:9", creditos, rechazos_por_escena)
+    anexar_tomas_reporte_md(ruta_rep, creditos)
     p.marcar("broll", "ok")
     print(f"✨ Clips de video listos y organizados. Reporte de rechazos: {ruta_rep}")
     return creditos
@@ -1275,3 +1301,26 @@ def _buscar_candidatos_pexels_scoring(queries, avoid=None, mood="misterio", clip
 
 def _buscar_candidatos_pixabay_scoring(queries, avoid=None, mood="misterio", clips_usados=None):
     return _buscar_candidatos_scoring(_buscar_candidatos_pixabay, "Pixabay", queries, avoid, mood, clips_usados)
+
+
+def anexar_tomas_reporte_md(ruta_rep: Path, creditos: list[dict]) -> None:
+    """Añade al reporte la lista de tomas por escena (clips reales con fuente='real' y B-roll libre)."""
+    lineas = ["", "## 3. Tomas por Escena (cortes 3-5 s, clips reales = fuente 'real')", ""]
+    hay = False
+    for c in creditos:
+        tomas = c.get("tomas") or []
+        if not tomas:
+            continue
+        hay = True
+        cortes = c.get("cortes") or []
+        lineas.append(f"### Escena {c['escena']:02d} — {len(cortes)} cortes")
+        for t in tomas:
+            if t.get("fuente") == "real":
+                lineas.append(f"- 🎞️ **real** `{t['archivo']}` {t.get('duracion', 0):.1f}s desde {t.get('inicio', 0):.1f}s — "
+                              f"Fuente: {t.get('credito', '')} — {t.get('url', '')}")
+            else:
+                lineas.append(f"- 🎬 stock `{t['archivo']}` — {t.get('key') or ''} {t.get('url', '')}")
+        lineas.append("")
+    if hay:
+        with open(ruta_rep, "a", encoding="utf-8") as f:
+            f.write("\n".join(lineas) + "\n")

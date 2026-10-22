@@ -333,6 +333,18 @@ def renderizar_clip_visual(
     fondo_es_video = broll_mp4.exists() and es_video_valido(broll_mp4)
     fondo_archivo = broll_mp4 if fondo_es_video else (broll_jpg if broll_jpg.exists() else None)
 
+    # Tomas de 3-5 s (clips reales EVIDENCIA + rotación de B-roll libre) si existe manifiesto
+    try:
+        from .tomas import montar_fondo_escena
+        montaje = montar_fondo_escena(
+            p, esc, duracion, p.ruta("render", f"fondo_tomas_{esc.id:03d}.mp4"), cfg=cfg
+        )
+    except Exception as e:
+        print(f"   ⚠️ Escena {esc.id}: montaje de tomas falló ({e}); se usa clip único.")
+        montaje = None
+    if montaje:
+        fondo_archivo, fondo_es_video = montaje, True
+
     sin_host = p.datos.get("sin_host", False)
     host_sprite = (
         obtener_sprite(esc.pose, boca="cerrada", mood=esc.music_mood, tema=p.tema, texto_voz=esc.voz)

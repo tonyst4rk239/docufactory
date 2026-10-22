@@ -159,6 +159,39 @@ def guardar_revision_json(p: Proyecto, items: list[dict[str, Any]]) -> None:
         p.marcar("revision", "pendiente")
 
 
+def _cuadros_tomas(p: Proyecto, eid: int, carpeta_revision: Path) -> list[dict[str, Any]]:
+    """Un cuadro JPG (mitad) por toma del manifiesto: clips reales (fuente='real') y B-roll libre."""
+    from .tomas import cargar_manifiesto
+    from .broll import obtener_duracion_video
+
+    man = cargar_manifiesto(p, eid)
+    if not man:
+        return []
+    ffmpeg = config.ffmpeg_bin("ffmpeg") or "ffmpeg"
+    salida: list[dict[str, Any]] = []
+    for k, t in enumerate(man.get("tomas", []), 1):
+        ruta = p.ruta("b_roll", t["archivo"])
+        nombre = f"escena_{eid:03d}_toma_{k:02d}.jpg"
+        destino = carpeta_revision / nombre
+        if ruta.exists():
+            dur = obtener_duracion_video(ruta) or 2.0
+            subprocess.run(
+                [ffmpeg, "-y", "-ss", f"{max(0.1, dur * 0.5):.2f}", "-i", str(ruta), "-frames:v", "1",
+                 "-vf", "scale=640:-2", "-q:v", "4", str(destino)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        salida.append({
+            "toma": k,
+            "archivo": t["archivo"],
+            "fuente": t.get("fuente", "stock"),
+            "url": t.get("url", ""),
+            "credito": t.get("credito"),
+            "duracion": t.get("duracion") or t.get("duracion_archivo"),
+            "cuadro": f"b_roll/revision/{nombre}" if destino.exists() else None,
+        })
+    return salida
+
+
 def generar_revision_broll(p: Proyecto, formato: str = "16:9", preservar_estados: bool = True) -> list[dict[str, Any]]:
     """Genera los 3 cuadros JPG por escena y escribe b_roll/revision.json con estado inicial 'pendiente'."""
     carpeta_revision = p.ruta("b_roll", "revision")
@@ -279,6 +312,7 @@ def generar_revision_broll(p: Proyecto, formato: str = "16:9", preservar_estados
             "resolucion": metricas["resolucion"],
             "luminancia_media": metricas["luminancia_media"],
             "cuadros": cuadros,
+            "tomas": _cuadros_tomas(p, eid, carpeta_revision),
             "estado": estado,
             "motivo_rechazo": motivo_rechazo,
         })

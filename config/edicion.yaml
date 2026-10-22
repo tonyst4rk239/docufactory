@@ -146,3 +146,24 @@ reels_9_16:
     enabled: true
     factor: 1.08
     duracion_s: 0.35
+
+# ------------------------------------------------------------------------------
+# Retención: rotación de tomas dentro de cada escena (16:9)
+# ------------------------------------------------------------------------------
+tomas:
+  enabled: true
+  corte_min_s: 3.0
+  corte_max_s: 5.0
+  max_clips_distintos_por_escena: 6
+
+# ------------------------------------------------------------------------------
+# Clips reales (clips_fuente en el guion): panel 'EVIDENCIA' transformado
+# ------------------------------------------------------------------------------
+clips_reales:
+  duracion_min_s: 3.0
+  duracion_max_s: 6.0
+  escala_panel: 0.70
+  etiqueta: "EVIDENCIA"
+  zoom_lento: 0.06
+  oscurecer_fondo: -0.22
+  desenfoque_fondo: 22
