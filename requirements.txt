@@ -11,3 +11,7 @@ rembg[cpu]>=2.0.50
 pytrends>=4.9.2
 edge-tts>=6.1
 yt-dlp>=2024.1
+google-api-python-client>=2.0
+google-auth-oauthlib>=1.0
+google-auth-httplib2>=0.2
+playwright>=1.40
