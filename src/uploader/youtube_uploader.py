@@ -10,7 +10,12 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
 CREDENTIALS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "credentials"
 CLIENT_SECRETS_FILE = CREDENTIALS_DIR / "client_secrets.json"
 TOKEN_FILE = CREDENTIALS_DIR / "token_youtube.json"
