@@ -40,6 +40,20 @@ def iniciar_sesion_tiktok():
     print("✅ ¡Sesión de TikTok guardada con éxito! Ya no tendrás que volver a iniciar sesión.")
 
 
+def _cerrar_popups(page) -> None:
+    """Cierra avisos/tutoriales de TikTok Studio que bloquean los clics (p. ej. 'Got it')."""
+    for txt in ("Got it", "Entendido", "OK", "Aceptar", "Allow all", "Permitir todo"):
+        try:
+            btn = page.locator(f"button:has-text('{txt}')")
+            for i in range(btn.count()):
+                b = btn.nth(i)
+                if b.is_visible():
+                    b.click(timeout=3000)
+                    time.sleep(0.5)
+        except Exception:
+            pass
+
+
 def subir_tiktok(
     video_path: Path | str,
     caption: str,
@@ -86,6 +100,7 @@ def subir_tiktok(
         print("   ⏳ Procesando video en la plataforma...")
         time.sleep(8)
 
+        _cerrar_popups(page)
         # Introducir Caption / Descripción
         print("   ✍️ Escribiendo texto y hashtags...")
         try:
@@ -103,22 +118,54 @@ def subir_tiktok(
 
         # Botón Publicar / Post
         print("   🚀 Haciendo clic en Publicar...")
-        btn_post = page.locator("button[data-e2e='post_video_button'], button:has-text('Publicar'), button:has-text('Post')").first
+        btn_post = page.locator("button[data-e2e='post_video_button']").or_(
+            page.get_by_role("button", name="Post", exact=True)).or_(
+            page.get_by_role("button", name="Publicar", exact=True)).first
+        _cerrar_popups(page)
         btn_post.wait_for(state="visible", timeout=180000)
         # Esperar a que termine de procesar (el botón se habilita)
         for _ in range(90):
             if btn_post.is_enabled() and btn_post.get_attribute("aria-disabled") != "true":
                 break
             time.sleep(2)
-        btn_post.click()
+        _cerrar_popups(page)
+        btn_post.scroll_into_view_if_needed()
+        try:
+            btn_post.click(timeout=15000)
+        except Exception:
+            btn_post.click(force=True, timeout=15000)
 
-        # Esperar confirmación
+        # Esperar confirmación real: TikTok redirige a la lista de contenido o muestra aviso de publicado
         print("   ⏳ Esperando confirmación de publicación de TikTok...")
-        time.sleep(10)
+        confirmado = False
+        for _ in range(60):
+            # Diálogo "Continue to post?" (la revisión de contenido aún corre): confirmar publicación
+            for txt in ("Post now", "Publicar ahora"):
+                try:
+                    b = page.locator(f"div[role='dialog'] button:has-text('{txt}'), .TUXModal button:has-text('{txt}'), button:has-text('{txt}')")
+                    if b.count() and b.first.is_visible():
+                        b.first.click(timeout=3000)
+                except Exception:
+                    pass
+            url = page.url
+            if "/tiktokstudio/content" in url or "/manage" in url:
+                confirmado = True
+                break
+            try:
+                if page.get_by_text("Your video has been uploaded").or_(page.get_by_text("Tu video se ha publicado")).or_(
+                        page.get_by_text("Video published")).first.is_visible():
+                    confirmado = True
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
         try:
             page.screenshot(path=str(path.with_suffix(".tiktok.png")))
         except Exception:
             pass
+        if not confirmado:
+            context.close()
+            raise RuntimeError(f"TikTok no confirmó la publicación (url final: {url}). Revisa {path.with_suffix('.tiktok.png')}")
 
         context.close()
 
