@@ -27,6 +27,13 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 
+def _sin_ssml(texto: str) -> str:
+    """Quita etiquetas SSML (<break .../>, etc.) del texto narrado para revision.json."""
+    import re as _re
+    t = _re.sub(r"<[^>]+>", " ", texto or "")
+    return _re.sub(r"\s+", " ", t).strip()
+
+
 def _imprimir(msg: str) -> None:
     try:
         print(msg)
@@ -264,7 +271,7 @@ def generar_revision_broll(p: Proyecto, formato: str = "16:9", preservar_estados
 
         items_revision.append({
             "escena": eid,
-            "texto_narrado": esc_info["texto"],
+            "texto_narrado": _sin_ssml(esc_info["texto"]),
             "consultas_usadas": consultas,
             "fuente": fuente,
             "url": url,
