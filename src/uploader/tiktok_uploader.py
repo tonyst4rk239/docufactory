@@ -1,6 +1,7 @@
 """Módulo de subida automatizada a TikTok mediante Playwright con sesión persistente."""
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -77,7 +78,8 @@ def subir_tiktok(
 
         # Subir archivo al input file
         print("   📁 Cargando archivo de video...")
-        file_input = page.wait_for_selector("input[type='file']", timeout=30000)
+        # El input de archivo de TikTok Studio está oculto: basta con que exista en el DOM.
+        file_input = page.wait_for_selector("input[type='file']", state="attached", timeout=60000)
         file_input.set_input_files(str(path))
 
         # Esperar a que cargue el formulario y procese el video
@@ -91,7 +93,7 @@ def subir_tiktok(
             caption_input = page.wait_for_selector(".DraftEditor-root, div[contenteditable='true'], [role='combobox']", timeout=20000)
             if caption_input:
                 caption_input.click()
-                page.keyboard.press("Control+A")
+                page.keyboard.press("Meta+A" if sys.platform == "darwin" else "Control+A")
                 page.keyboard.press("Backspace")
                 page.keyboard.type(caption, delay=20)
         except Exception as e:
@@ -101,12 +103,22 @@ def subir_tiktok(
 
         # Botón Publicar / Post
         print("   🚀 Haciendo clic en Publicar...")
-        btn_post = page.locator("button:has-text('Publicar'), button:has-text('Post')").first
+        btn_post = page.locator("button[data-e2e='post_video_button'], button:has-text('Publicar'), button:has-text('Post')").first
+        btn_post.wait_for(state="visible", timeout=180000)
+        # Esperar a que termine de procesar (el botón se habilita)
+        for _ in range(90):
+            if btn_post.is_enabled() and btn_post.get_attribute("aria-disabled") != "true":
+                break
+            time.sleep(2)
         btn_post.click()
 
         # Esperar confirmación
         print("   ⏳ Esperando confirmación de publicación de TikTok...")
-        time.sleep(8)
+        time.sleep(10)
+        try:
+            page.screenshot(path=str(path.with_suffix(".tiktok.png")))
+        except Exception:
+            pass
 
         context.close()
 
