@@ -44,8 +44,20 @@ def _resolver_cookies() -> Path | None:
 YTDLP_COOKIES: Path | None = _resolver_cookies()
 
 # --- Modelos (solo usados si se invoca Gemini como respaldo opcional) ---
-MODELO_GUION = os.getenv("MODELO_GUION", "gemini-3.1-pro-preview")
-MODELO_ESTRUCTURA = os.getenv("MODELO_ESTRUCTURA", "gemini-3.1-pro-preview")
+MODELO_PRO_DEFAULT = "gemini-3.1-pro-preview"
+# Modelos retirados por Google (404 para usuarios nuevos): se sustituyen automáticamente.
+MODELOS_RETIRADOS = {"gemini-2.5-pro", "models/gemini-2.5-pro"}
+
+
+def _modelo_vigente(nombre_env: str, default: str = MODELO_PRO_DEFAULT) -> str:
+    valor = (os.getenv(nombre_env) or "").strip()
+    if not valor or valor in MODELOS_RETIRADOS:
+        return default
+    return valor
+
+
+MODELO_GUION = _modelo_vigente("MODELO_GUION")
+MODELO_ESTRUCTURA = _modelo_vigente("MODELO_ESTRUCTURA")
 MODELO_JUEZ = os.getenv("MODELO_JUEZ", "gemini-2.5-flash")
 MODELO_IMAGEN = os.getenv("MODELO_IMAGEN", "gemini-2.5-flash-image")
 
