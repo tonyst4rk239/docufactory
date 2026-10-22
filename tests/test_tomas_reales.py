@@ -141,3 +141,39 @@ class TestRenderTomas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRespaldoDescarga(unittest.TestCase):
+    def test_respaldo_sin_rango_si_falla_corte(self):
+        """Si el corte por rango falla (p. ej. X/HLS), se reintenta descargando a temporal y recortando."""
+        from unittest import mock
+        import src.tomas as t
+        llamadas = []
+
+        class FakeYDL:
+            def __init__(self, opts):
+                self.opts = opts
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def extract_info(self, url, download=False):
+                return {"duration": 57}
+            def download(self, urls):
+                llamadas.append("rango" if "download_ranges" in self.opts else "completo")
+                destino = Path(self.opts["outtmpl"].replace("%(ext)s", "mp4"))
+                if "download_ranges" in self.opts:
+                    destino.write_bytes(b"x" * 261)  # archivo basura como el de X
+                else:
+                    subprocess.run([FFMPEG, "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30", "-t", "10",
+                                    "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast", str(destino)],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        with tempfile.TemporaryDirectory() as d, mock.patch("yt_dlp.YoutubeDL", FakeYDL):
+            out = Path(d) / "frag.mp4"
+            ok, err = t.descargar_fragmento_real("https://x.com/i/status/1", 3.0, 4.0, out)
+            self.assertTrue(ok, err)
+            self.assertEqual(llamadas, ["rango", "completo"])
+            self.assertAlmostEqual(_dur(out), 4.0, delta=0.2)
+            # El temporal completo no queda en disco: solo el fragmento
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["frag.mp4"])

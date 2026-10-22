@@ -27,6 +27,7 @@ DEF_REALES = {
     "duracion_min_s": 3.0, "duracion_max_s": 6.0, "escala_panel": 0.70, "etiqueta": "EVIDENCIA",
     "zoom_lento": 0.06, "oscurecer_fondo": -0.22, "desenfoque_fondo": 22,
 }
+MAX_DURACION_RESPALDO_S = 600
 _STOP = {"the", "a", "an", "of", "in", "on", "at", "with", "and", "or", "to", "for", "by", "from",
          "into", "over", "under", "close", "up", "shot", "footage", "video", "cinematic", "4k", "hd"}
 
@@ -140,32 +141,53 @@ def descargar_fragmento_real(url: str, inicio: float, duracion: float, destino: 
     from .broll import opciones_ytdlp_base
 
     destino.parent.mkdir(parents=True, exist_ok=True)
-    tmpdir = Path(tempfile.mkdtemp(prefix="real_", dir=str(destino.parent)))
-    try:
-        opts = opciones_ytdlp_base()
-        opts.update({
-            "outtmpl": str(tmpdir / "frag.%(ext)s"),
-            "format": "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b",
-            "download_ranges": download_range_func(None, [(float(inicio), float(inicio) + float(duracion))]),
-            "force_keyframes_at_cuts": True,
-            "merge_output_format": "mp4",
-            "noplaylist": True,
-            "retries": 2,
-            "socket_timeout": 30,
-        })
+
+    def _intento(por_rango: bool) -> tuple[bool, str]:
+        tmpdir = Path(tempfile.mkdtemp(prefix="real_", dir=str(destino.parent)))
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-        except Exception as e:
-            return False, str(e).splitlines()[0][:220]
-        archivos = [f for f in tmpdir.iterdir() if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")]
-        if not archivos:
-            return False, "yt-dlp no produjo archivo de video"
-        ok = _run([_ffmpeg(), "-y", "-i", str(archivos[0]), "-t", f"{duracion:.2f}", "-an",
-                   "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(destino)])
-        return (ok and destino.exists() and destino.stat().st_size > 1000), ("" if ok else "fallo al normalizar con ffmpeg")
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+            opts = opciones_ytdlp_base()
+            opts.update({
+                "outtmpl": str(tmpdir / "frag.%(ext)s"),
+                "format": "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b",
+                "merge_output_format": "mp4",
+                "noplaylist": True,
+                "retries": 2,
+                "socket_timeout": 30,
+                "noprogress": True,
+            })
+            if por_rango:
+                opts["download_ranges"] = download_range_func(None, [(float(inicio), float(inicio) + float(duracion))])
+                opts["force_keyframes_at_cuts"] = True
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    if not por_rango:
+                        info = ydl.extract_info(url, download=False) or {}
+                        if float(info.get("duration") or 0) > MAX_DURACION_RESPALDO_S:
+                            return False, f"video de {info.get('duration')} s: demasiado largo para respaldo"
+                    ydl.download([url])
+            except Exception as e:
+                return False, str(e).splitlines()[0][:220]
+            archivos = [f for f in tmpdir.iterdir() if f.is_file() and f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")
+                        and f.stat().st_size > 10_000]
+            if not archivos:
+                return False, "yt-dlp no produjo un archivo de video válido"
+            pre = [] if por_rango else ["-ss", f"{float(inicio):.2f}"]
+            ok = _run([_ffmpeg(), "-y", *pre, "-i", str(archivos[0]), "-t", f"{duracion:.2f}", "-an",
+                       "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(destino)])
+            ok = ok and destino.exists() and destino.stat().st_size > 1000
+            return ok, ("" if ok else "fallo al normalizar con ffmpeg")
+        finally:
+            # El archivo temporal (rango o completo) se elimina siempre: solo queda el fragmento de 3-6 s
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    ok, err = _intento(por_rango=True)
+    if not ok:
+        # Algunos sitios (p. ej. X con HLS) no soportan cortes por rango: se descarga a temporal y se recorta
+        ok2, err2 = _intento(por_rango=False)
+        if ok2:
+            return True, ""
+        return False, f"{err} | respaldo: {err2}"
+    return ok, err
 
 
 def geometria_panel(pose: str, host_lado: str, host_visible: bool, escala: float = 0.70) -> tuple[int, int, int, int]:
