@@ -111,6 +111,16 @@ class CapituloGuion(BaseModel):
         return data
 
 
+class ClipFuente(BaseModel):
+    """Fragmento real (viral / redes) que se muestra transformado como panel 'EVIDENCIA'."""
+    url: str = Field(description="URL del video original (YouTube, X, Facebook, TikTok o cualquier sitio soportado por yt-dlp).")
+    inicio: float = Field(default=0.0, description="Segundo de inicio del fragmento.")
+    duracion: float = Field(default=4.0, description="Duración del fragmento en segundos (se recorta a 3-6 s).")
+    credito: str = Field(default="", description="Crédito visible en pantalla: 'Fuente: <credito>'.")
+    etiqueta: str = Field(default="EVIDENCIA", description="Etiqueta superior del panel.")
+    resaltar: Optional[list[float]] = Field(default=None, description="Caja de resalte opcional [x, y, w, h] en fracciones 0-1 del fragmento.")
+
+
 class Escena(BaseModel):
     id: int
     acto: Acto = "contexto"
@@ -146,6 +156,7 @@ class Escena(BaseModel):
     music_mood: Mood = "misterio"
     short_id: Optional[int] = Field(default=None, description="1, 2 o 3 si la escena pertenece a un Short; null si no.")
     capitulo: Optional[str] = Field(default=None, description="Título de capítulo si esta escena abre uno; null si no.")
+    clips_fuente: list[ClipFuente] = Field(default_factory=list, description="Fragmentos reales (3-6 s) priorizados sobre el B-roll libre.")
 
     @model_validator(mode="before")
     @classmethod
@@ -216,6 +227,7 @@ class Guion(BaseModel):
     capitulos: list[CapituloGuion] = Field(default_factory=list, description="Lista de capítulos del video.")
     hook: Optional[str] = Field(default=None, description="Frase gancho inicial (especialmente útil en 9:16).")
     bucle_loop_frase: Optional[str] = Field(default=None, description="Frase de cierre para bucle en 9:16.")
+    fuentes_video: list[dict] = Field(default_factory=list, description="Lista opcional de videos fuente del episodio (url, credito, descripcion).")
     escenas: list[Escena]
 
     @model_validator(mode="before")
@@ -714,6 +726,31 @@ def validar_json_externo(
                 errores.append(
                     f"{pref}.sfx: Efecto '{sfx_raw}' inválido. Permitidos: ninguno, whoosh, impacto, riser, tension, revelacion, glitch, ambiente, digital, click, transicion."
                 )
+
+            cf_raw = esc.get("clips_fuente")
+            if cf_raw is not None:
+                if not isinstance(cf_raw, list):
+                    errores.append(f"{pref}.clips_fuente: Debe ser una lista de objetos {{url, inicio, duracion, credito}}.")
+                else:
+                    for j, cf in enumerate(cf_raw):
+                        pcf = f"{pref}.clips_fuente[{j}]"
+                        if not isinstance(cf, dict) or not str(cf.get("url") or "").strip().lower().startswith(("http://", "https://")):
+                            errores.append(f"{pcf}.url: Se requiere una URL http(s) válida.")
+                            continue
+                        try:
+                            d_cf = float(cf.get("duracion", 4.0))
+                            float(cf.get("inicio", 0.0))
+                        except (TypeError, ValueError):
+                            errores.append(f"{pcf}: 'inicio' y 'duracion' deben ser números (segundos).")
+                            continue
+                        if not 3.0 <= d_cf <= 6.0:
+                            avisos.append(f"{pcf}.duracion: {d_cf}s fuera de 3-6 s; se recortará al rango permitido.")
+                        if not str(cf.get("credito") or "").strip():
+                            avisos.append(f"{pcf}.credito: Sin crédito; se mostrará 'Fuente: redes sociales'.")
+
+    fv_raw = datos.get("fuentes_video")
+    if fv_raw is not None and not isinstance(fv_raw, list):
+        errores.append("fuentes_video: Debe ser una lista de objetos {url, credito, descripcion}.")
 
     if errores:
         return None, errores, avisos

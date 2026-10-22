@@ -1,0 +1,99 @@
+{
+  "titulo": "Top 1 barrera vial que se mueve sola (ejemplo clips reales)",
+  "formato": "16:9",
+  "mood": "misterio",
+  "top_n": 1,
+  "minutos": 1.0,
+  "resumen": "Tres expedientes históricos documentados donde la ciencia y la investigación forense jamás encontraron una explicación definitiva.",
+  "youtube_metadata": {
+    "titulos": [
+      "3 Misterios Reales Que La Ciencia Jamás Pudo Explicar",
+      "Los 3 Casos Sin Resolver Más Inquietantes De La Historia",
+      "Nadie Sabe Qué Pasó Aquí: Top 3 Misterios Históricos"
+    ],
+    "descripcion": "A lo largo de la historia existen expedientes oficiales donde todas las pruebas físicas contradicen la lógica. En este documental analizamos los 3 misterios sin resolver más inquietantes jamás registrados.\n\nDesde manuscritos cifrados en lenguas imposibles hasta señales del espacio profundo y expediciones perdidas en la nieve, descubre por qué estos casos siguen abiertos hoy.",
+    "tags": [
+      "misterios sin resolver",
+      "documental misterio",
+      "top 3 misterios",
+      "manuscrito voynich",
+      "señal wow",
+      "paso dyatlov",
+      "historia oscura",
+      "casos inexplicables"
+    ]
+  },
+  "capitulos": [
+    {
+      "escena_id": 1,
+      "titulo": "Puesto #1: La barrera"
+    }
+  ],
+  "fuentes_video": [
+    {
+      "url": "https://www.tiktok.com/@lalistadeportes/video/7698555168178064646",
+      "credito": "TikTok @lalistadeportes (La-Lista)",
+      "descripcion": "Barrera vial que se mueve sola en Querétaro",
+      "articulo": "https://la-lista.com/mexico/barrera-vial-embrujada-se-mueve-sola-y-bloquea-a-trailero-en-carretera-de-queretaro-video"
+    }
+  ],
+  "escenas": [
+    {
+      "id": 1,
+      "acto": "gancho",
+      "puesto": 1,
+      "puesto_titulo": "LA BARRERA QUE SE MUEVE SOLA",
+      "voz": "Libramiento Noreste de Querétaro. <break time=\"400ms\"/> Un trailero graba cómo una barrera de plástico se desliza sola y le bloquea el paso. Nadie la empuja.",
+      "pose": "sorprendido",
+      "host_lado": "izquierda",
+      "broll_queries_en": [
+        "empty highway road barriers",
+        "overcast highway traffic cones"
+      ],
+      "broll_mood_keywords": [
+        "dark",
+        "overcast",
+        "road"
+      ],
+      "broll_avoid_keywords": [
+        "sunny",
+        "beach",
+        "cartoon",
+        "crowd"
+      ],
+      "music_mood": "tension",
+      "sfx": "impacto",
+      "clips_fuente": [
+        {
+          "url": "https://www.tiktok.com/@lalistadeportes/video/7698555168178064646",
+          "inicio": 2,
+          "duracion": 5,
+          "credito": "TikTok @lalistadeportes (La-Lista)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "acto": "cta",
+      "puesto": null,
+      "puesto_titulo": null,
+      "voz": "¿Viento o algo más? <break time=\"300ms\"/> Déjalo en los comentarios.",
+      "pose": "duda",
+      "host_lado": "derecha",
+      "broll_queries_en": [
+        "dark road night rain"
+      ],
+      "broll_mood_keywords": [
+        "dark",
+        "night"
+      ],
+      "broll_avoid_keywords": [
+        "sunny",
+        "beach",
+        "cartoon"
+      ],
+      "music_mood": "misterio",
+      "sfx": "whoosh"
+    }
+  ]
+}

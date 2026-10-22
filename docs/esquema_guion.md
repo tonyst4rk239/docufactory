@@ -36,6 +36,7 @@ python make_video.py importar ejemplos/guion_ejemplo.json --auto --reusar
 | `capitulos` | `list[object]` | **Sí** | Lista de capítulos con `escena_id` (`int`), `titulo` (`str`) y `timestamp` (`str`, opcional). |
 | `hook` | `string` | Opcional | Frase gancho inicial (usada especialmente en formato `9:16`). |
 | `bucle_loop_frase` | `string` | Opcional | Frase final de cierre en bucle para formato `9:16`. |
+| `fuentes_video` | `list[object]` | Opcional | Videos fuente del episodio: `{url, credito, descripcion, articulo}`. Solo documenta; los fragmentos se declaran por escena en `clips_fuente`. |
 | `escenas` | `list[object]` | **Sí** | Lista ordenada de escenas del montaje (mínimo 1 escena). |
 
 ---
@@ -80,6 +81,7 @@ python make_video.py importar ejemplos/guion_ejemplo.json --auto --reusar
 | `sfx` | `string` | **Sí** | Efecto de sonido puntual: `"ninguno"`, `"whoosh"`, `"impacto"`, `"riser"`, `"tension"`, `"revelacion"`, `"glitch"`, `"ambiente"`, `"digital"`, `"click"`, `"transicion"`. |
 | `texto_pantalla` | `string` | Opcional | Se autogenera como `"#N: PUESTO_TITULO"` en los inicios de puesto si se deja vacío. |
 | `texto_destacado` | `string` | Opcional (9:16) | 1 a 2 palabras clave en MAYÚSCULAS para activar el *zoom punch* y el color destacado del karaoke en Reels `9:16`. |
+| `clips_fuente` | `list[object]` | Opcional | Fragmentos **reales** (videos virales de redes) con prioridad sobre el B-roll libre. Ver sección *Clips reales*. |
 | `capitulo` | `string` \| `null` | Opcional | Nombre del capítulo si esta escena inicia uno (también puede definirse en la lista raíz `capitulos`). |
 
 ---
@@ -93,3 +95,48 @@ python make_video.py importar ejemplos/guion_ejemplo.json --auto --reusar
    - En `9:16`, usa micro-escenas de 2 a 3 segundos (6 a 10 palabras por escena).
 3. **Tarjetas `TOP #N`**:
    - La primera escena de cada puesto debe incluir `puesto` (entero) y `puesto_titulo` (en mayúsculas). La tarjeta `.ass` aparecerá automáticamente `0.35 s` después del efecto glitch/transición con tamaño legible y fondo semitransparente.
+
+---
+
+## Clips reales (`clips_fuente`) — panel "EVIDENCIA"
+
+Cada escena puede declarar fragmentos del video viral original. El pipeline los descarga **primero** con `yt-dlp`
+(YouTube, TikTok, X/Twitter, Facebook, Instagram, streams `.m3u8` de medios y cualquier sitio soportado; usa
+`YTDLP_COOKIES` si está configurado), descarga **solo el rango pedido** (nunca el video completo) y lo transforma:
+
+- panel al ~70 % (`clips_reales.escala_panel`) sobre el mismo video desenfocado y oscurecido,
+- zoom lento, marco amarillo, etiqueta superior (`EVIDENCIA` por defecto) y crédito `Fuente: <credito>`,
+- caja de resalte opcional (`resaltar`),
+- el panel y los textos se colocan en el lado opuesto al host (`host_lado`), sin solaparlo.
+
+| Campo | Tipo | Obligatorio | Descripción |
+| :--- | :--- | :---: | :--- |
+| `url` | `string` | **Sí** | URL http(s) del video original. |
+| `inicio` | `float` | Opcional | Segundo de inicio del fragmento (por defecto `0`). |
+| `duracion` | `float` | Opcional | 3 a 6 s (se recorta a ese rango; por defecto `4`). |
+| `credito` | `string` | Recomendado | Autor/cuenta/medio visible en pantalla (ej. `"TikTok @soymac69"`). |
+| `etiqueta` | `string` | Opcional | Texto de la etiqueta del panel (por defecto `"EVIDENCIA"`). |
+| `resaltar` | `[x, y, w, h]` | Opcional | Caja roja de resalte en fracciones 0-1 del fragmento. |
+
+Los clips reales **no** pasan por el filtro anti-creador del B-roll libre, pero quedan registrados con
+`fuente: "real"` en `b_roll/broll_reporte.md` (sección *Tomas por Escena*) y en `b_roll/revision.json` (`tomas[]`).
+Si una descarga falla, se registra como rechazo y la escena se rellena con B-roll libre.
+
+```json
+"clips_fuente": [
+  {"url": "https://www.tiktok.com/@soymac69/video/7201181925028023558", "inicio": 2, "duracion": 6, "credito": "TikTok @soymac69"}
+]
+```
+
+Ejemplo completo: `ejemplos/guion_ejemplo_clips_reales.json`.
+
+---
+
+## Retención: tomas de 3-5 s por escena
+
+Cada escena se divide en tomas de `tomas.corte_min_s`-`tomas.corte_max_s` segundos (`config/edicion.yaml`, por
+defecto 3-5 s). Los clips reales ocupan las primeras tomas; el resto rota entre varios clips libres **distintos**
+(máx. `tomas.max_clips_distintos_por_escena`, sin duplicados en todo el video y evitando series consecutivas de
+Pixabay), buscados con consultas cortas de 2-3 palabras derivadas de `broll_queries_en`.
+Manifiesto por escena: `b_roll/escena_XXX_tomas.json`. La revisión genera un cuadro por toma
+(`b_roll/revision/escena_XXX_toma_NN.jpg`) y lo lista en `revision.json -> tomas[]`.
