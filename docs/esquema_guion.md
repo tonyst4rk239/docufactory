@@ -117,6 +117,8 @@ Cada escena puede declarar fragmentos del video viral original. El pipeline los 
 | `credito` | `string` | Recomendado | Autor/cuenta/medio visible en pantalla (ej. `"TikTok @soymac69"`). |
 | `etiqueta` | `string` | Opcional | Texto de la etiqueta del panel (por defecto `"EVIDENCIA"`). |
 | `resaltar` | `[x, y, w, h]` | Opcional | Caja roja de resalte en fracciones 0-1 del fragmento. |
+| `estilo` | `string` | Opcional | `evidencia` (panel con marco, por defecto), `completo` (pantalla completa con viñeta; vertical centrado en la zona libre), `dividido` (ORIGINAL vs ACERCAMIENTO de `resaltar`), `congelado` (reproduce ~45 % y congela el cuadro con resalte). El crédito `Fuente:` siempre queda visible. Si la escena abre con tarjeta TOP/texto, la 1.ª toma real se fuerza a `completo` y ≥ 4 s para que la tarjeta no caiga sobre un panel. |
+| `recorte` | `[x, y, w, h]` | Opcional | Recorte previo en fracciones 0-1 para quitar barras, subtítulos o gráficos del medio original. Las tomas oscuras (YAVG < `clips_reales.yavg_realce`) se aclaran automáticamente. |
 
 Los clips reales **no** pasan por el filtro anti-creador del B-roll libre, pero quedan registrados con
 `fuente: "real"` en `b_roll/broll_reporte.md` (sección *Tomas por Escena*) y en `b_roll/revision.json` (`tomas[]`).

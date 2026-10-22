@@ -36,18 +36,18 @@ color_grading:
   enabled: true
   moods:
     misterio:
-      # Frío sutil sin tinte morado/magenta, menos desaturación y sombras preservadas con curves
+      # Neutro-frío sin tinte morado/magenta (v3: menos azul, verde compensado), menos desaturación y sombras preservadas con curves
       saturation: 0.88
       contrast: 1.05
       brightness: 0.00
-      colorbalance: "rs=-0.02:gs=0.01:bs=0.03:rm=-0.01:gm=0.01:bm=0.02"
+      colorbalance: "rs=-0.02:gs=0.02:bs=0.01:rm=-0.02:gm=0.02:bm=0.00"
       curves: "master='0/0.02 0.18/0.19 0.50/0.51 0.85/0.86 1/1'"
     tension:
       # Contraste frío controlado conservando detalle en sombras
       saturation: 0.82
       contrast: 1.10
       brightness: -0.01
-      colorbalance: "rs=-0.03:gs=0.01:bs=0.05:rm=-0.02:gm=0.01:bm=0.03"
+      colorbalance: "rs=-0.02:gs=0.02:bs=0.02:rm=-0.02:gm=0.02:bm=0.00"
       curves: "master='0/0.01 0.20/0.20 0.50/0.51 0.85/0.86 1/1'"
     epica:
       # Contraste cálido cinematográfico (dorado / ámbar en altas luces)
@@ -79,10 +79,10 @@ textura_visual:
   video_overlay:
     enabled: true
     blend_mode: "screen"
-    opacity: 0.18          # Rango recomendado: 0.15 a 0.25 (15% - 25%)
+    opacity: 0.14          # v3: más bajo para no teñir (morado) la imagen
     por_mood:
-      misterio: ["dust_overlay", "film_grain", "vhs"]
-      tension: ["film_grain", "glitch", "vhs"]
+      misterio: ["dust_overlay", "film_grain"]   # sin "vhs": su capa morada teñía la imagen
+      tension: ["film_grain", "dust_overlay"]    # sin "vhs"/"glitch" (tinte morado/azul)
       epica: ["light_leak", "dust_overlay", "film_grain"]
       curiosidad: ["dust_overlay", "light_leak", "film_grain"]
       calma: ["dust_overlay", "light_leak"]
@@ -167,3 +167,5 @@ clips_reales:
   zoom_lento: 0.06
   oscurecer_fondo: -0.22
   desenfoque_fondo: 22
+  yavg_realce: 55        # fragmentos reales más oscuros que esto se aclaran (gamma) para evitar tomas casi negras
+  fin_tarjeta_s: 4.0     # con tarjeta TOP/texto, la 1.ª toma real va a pantalla completa y dura >= 4 s

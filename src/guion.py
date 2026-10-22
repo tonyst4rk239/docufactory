@@ -119,6 +119,8 @@ class ClipFuente(BaseModel):
     credito: str = Field(default="", description="Crédito visible en pantalla: 'Fuente: <credito>'.")
     etiqueta: str = Field(default="EVIDENCIA", description="Etiqueta superior del panel.")
     resaltar: Optional[list[float]] = Field(default=None, description="Caja de resalte opcional [x, y, w, h] en fracciones 0-1 del fragmento.")
+    estilo: str = Field(default="evidencia", description="Presentación: evidencia | completo | dividido | congelado.")
+    recorte: Optional[list[float]] = Field(default=None, description="Recorte previo [x, y, w, h] en fracciones 0-1 (quita barras, textos o marcos del original).")
 
 
 class Escena(BaseModel):
@@ -745,6 +747,8 @@ def validar_json_externo(
                             continue
                         if not 3.0 <= d_cf <= 6.0:
                             avisos.append(f"{pcf}.duracion: {d_cf}s fuera de 3-6 s; se recortará al rango permitido.")
+                        if str(cf.get("estilo") or "evidencia").strip().lower() not in ("evidencia", "completo", "dividido", "congelado"):
+                            errores.append(f"{pcf}.estilo: Use evidencia, completo, dividido o congelado.")
                         if not str(cf.get("credito") or "").strip():
                             avisos.append(f"{pcf}.credito: Sin crédito; se mostrará 'Fuente: redes sociales'.")
 

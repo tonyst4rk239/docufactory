@@ -200,53 +200,171 @@ def geometria_panel(pose: str, host_lado: str, host_visible: bool, escala: float
     return cx, cy, max_w, max_h
 
 
-def transformar_evidencia(raw: Path, destino: Path, duracion: float, credito: str, etiqueta: str = "EVIDENCIA",
-                          pose: str = "explicando", host_lado: str = "izquierda", host_visible: bool = True,
-                          resaltar: Optional[list[float]] = None, cfg: Optional[dict] = None) -> bool:
-    """Panel ~70 % sobre fondo desenfocado y oscurecido, zoom lento, etiqueta y 'Fuente: <credito>'."""
+ESTILOS_REALES = ("evidencia", "completo", "dividido", "congelado")
+
+
+def luminancia_media(ruta: Path) -> Optional[float]:
+    """YAVG medio (0-255) de un fragmento, con signalstats sobre ~4 cuadros por segundo."""
+    try:
+        r = subprocess.run([_ffmpeg(), "-hide_banner", "-i", str(ruta), "-vf", "fps=4,signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+                            "-f", "null", "-"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120, text=True)
+        vals = [float(v) for v in re.findall(r"YAVG=([0-9.]+)", r.stdout)]
+        return sum(vals) / len(vals) if vals else None
+    except Exception:
+        return None
+
+
+def _filtro_previo(recorte: Optional[list[float]], yavg: Optional[float], cfg_r: dict) -> str:
+    """Recorte opcional (quita marcos/textos del original) + realce de tomas oscuras (evita cuadros casi negros)."""
+    partes = []
+    if recorte and len(recorte) == 4:
+        x, y, w, h = [max(0.0, min(1.0, float(v))) for v in recorte]
+        w, h = max(0.05, min(w, 1 - x)), max(0.05, min(h, 1 - y))
+        partes.append(f"crop=trunc(iw*{w:.4f}/2)*2:trunc(ih*{h:.4f}/2)*2:iw*{x:.4f}:ih*{y:.4f}")
+    umbral = float(cfg_r.get("yavg_realce", 55))
+    if yavg is not None and yavg < umbral:
+        # Más realce cuanto más oscuro (gamma 1.15-1.8); nunca deja la toma casi negra
+        g = min(1.8, 1.15 + (umbral - yavg) / 60.0)
+        partes.append(f"eq=gamma={g:.2f}:brightness=0.03:contrast=1.04")
+    return ",".join(partes)
+
+
+def transformar_real(raw: Path, destino: Path, duracion: float, credito: str, etiqueta: str = "EVIDENCIA",
+                     estilo: str = "evidencia", recorte: Optional[list[float]] = None,
+                     pose: str = "explicando", host_lado: str = "izquierda", host_visible: bool = True,
+                     resaltar: Optional[list[float]] = None, cfg: Optional[dict] = None) -> bool:
+    """Transforma un fragmento real (3-6 s) en una toma con contexto y crédito SIEMPRE visible.
+
+    Estilos:
+      - evidencia: panel ~70 % con marco amarillo sobre fondo desenfocado, zoom lento.
+      - completo:  pantalla completa (o vertical centrado sobre fondo desenfocado) con viñeta.
+      - dividido:  comparación ORIGINAL | ACERCAMIENTO (zona de `resaltar` o centro) lado a lado.
+      - congelado: reproduce ~45 % y congela el cuadro con resalte y rótulo 'CUADRO CONGELADO'.
+    Todo se coloca en la zona opuesta al host (layout.zona_texto) para no solaparlo.
+    """
     rc = cfg_reales(cfg)
-    cx, cy, pw, ph = geometria_panel(pose, host_lado, host_visible, float(rc["escala_panel"]))
+    estilo = (estilo or "evidencia").lower()
+    if estilo not in ESTILOS_REALES:
+        estilo = "evidencia"
     D = max(0.5, float(duracion))
     z = float(rc["zoom_lento"])
     fuente = config.FONTS_DIR / "bold.ttf"
+    zona = zona_texto(caja_host(pose, host_lado, host_visible))
     tmp = Path(tempfile.mkdtemp(prefix="ev_", dir=str(destino.parent)))
     try:
         (tmp / "etq.txt").write_text(f" {etiqueta.upper()} ", encoding="utf-8")
         (tmp / "cred.txt").write_text(f"Fuente: {credito or 'redes sociales'}", encoding="utf-8")
+        (tmp / "frz.txt").write_text(" CUADRO CONGELADO ", encoding="utf-8")
+        (tmp / "ori.txt").write_text(" ORIGINAL ", encoding="utf-8")
+        (tmp / "zoom.txt").write_text(" ACERCAMIENTO ", encoding="utf-8")
         from .broll import obtener_dimensiones_video
         try:
             iw, ih, _ = obtener_dimensiones_video(raw)
         except Exception:
             iw, ih = 1920, 1080
         iw, ih = (iw or 1920), (ih or 1080)
-        esc_fit = min(pw / iw, ph / ih)
-        qw, qh = max(2, int(iw * esc_fit) // 2 * 2), max(2, int(ih * esc_fit) // 2 * 2)
-        pw, ph = qw, qh
+        if recorte and len(recorte) == 4:
+            iw = max(2, int(iw * max(0.05, float(recorte[2]))))
+            ih = max(2, int(ih * max(0.05, float(recorte[3]))))
+        pre = _filtro_previo(recorte, luminancia_media(raw), rc)
+        pre_c = (pre + ",") if pre else ""
         ff = f":fontfile='{_ruta_filtro(fuente)}'" if fuente.exists() else ""
-        hl = ""
+        etq = f"textfile='{_ruta_filtro(tmp / 'etq.txt')}'{ff}:fontsize=46:fontcolor=white:box=1:boxcolor=0xC81E1E@0.95:boxborderw=12"
+        cred = f"textfile='{_ruta_filtro(tmp / 'cred.txt')}'{ff}:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=10"
+        hl_box = ""
         if resaltar and len(resaltar) == 4:
             fx, fy, fw, fh = [max(0.0, min(1.0, float(v))) for v in resaltar]
-            hl = f",drawbox=x=iw*{fx:.3f}:y=ih*{fy:.3f}:w=iw*{fw:.3f}:h=ih*{fh:.3f}:color=red@0.9:t=6"
-        filtro = (
-            f"[0:v]split[a][b];"
-            f"[a]scale={ANCHO}:{ALTO}:force_original_aspect_ratio=increase,crop={ANCHO}:{ALTO},"
-            f"boxblur={int(rc['desenfoque_fondo'])}:2,eq=brightness={float(rc['oscurecer_fondo']):.2f}:saturation=0.6,setsar=1[bg];"
-            f"[b]scale={qw}:{qh},setsar=1,"
-            f"scale=w='trunc({qw}*(1+{z}*t/{D:.2f})/2)*2':h='trunc({qh}*(1+{z}*t/{D:.2f})/2)*2':eval=frame,"
-            f"crop={qw}:{qh}{hl},"
-            f"drawbox=x=0:y=0:w=iw:h=ih:color=0xFFD400@0.95:t=6[pn];"
-            f"[bg][pn]overlay=x={cx}-w/2:y={cy}-h/2:shortest=1,"
-            f"drawtext=textfile='{_ruta_filtro(tmp / 'etq.txt')}'{ff}:fontsize=46:fontcolor=white:box=1:boxcolor=0xC81E1E@0.95:boxborderw=12:"
-            f"x={cx}-{pw}/2:y={cy}-{ph}/2-78,"
-            f"drawtext=textfile='{_ruta_filtro(tmp / 'cred.txt')}'{ff}:fontsize=34:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=10:"
-            f"x={cx}-text_w/2:y={cy}+{ph}/2+26,"
-            f"fps=30,format=yuv420p[v]"
-        )
+            hl_box = f"drawbox=x=iw*{fx:.3f}:y=ih*{fy:.3f}:w=iw*{fw:.3f}:h=ih*{fh:.3f}:color=red@0.9:t=6"
+        fondo = (f"[a]{pre_c}scale={ANCHO}:{ALTO}:force_original_aspect_ratio=increase,crop={ANCHO}:{ALTO},"
+                 f"boxblur={int(rc['desenfoque_fondo'])}:2,eq=brightness={float(rc['oscurecer_fondo']):.2f}:saturation=0.6,setsar=1[bg];")
+        cx = int(zona.x + zona.w / 2)
+        if estilo == "completo":
+            # Pantalla completa si es horizontal; vertical/cuadrado centrado en la zona libre sobre fondo desenfocado
+            esc = min(ANCHO / iw, ALTO / ih)
+            qw, qh = max(2, int(iw * esc) // 2 * 2), max(2, int(ih * esc) // 2 * 2)
+            ox = 0 if qw >= ANCHO - 4 else max(0, min(ANCHO - qw, cx - qw // 2))
+            filtro = (
+                f"[0:v]split[a][b];{fondo}"
+                f"[b]{pre_c}scale={qw}:{qh},setsar=1,"
+                f"scale=w='trunc({qw}*(1+{z}*t/{D:.2f})/2)*2':h='trunc({qh}*(1+{z}*t/{D:.2f})/2)*2':eval=frame,crop={qw}:{qh}"
+                f"{(',' + hl_box) if hl_box else ''}[pn];"
+                f"[bg][pn]overlay=x={ox}:y=(H-h)/2:shortest=1,vignette=angle=PI/4,"
+                f"drawtext={etq}:x={cx}-text_w/2:y={ALTO - 190},"
+                f"drawtext={cred}:x={cx}-text_w/2:y={ALTO - 110},"
+                f"fps=30,format=yuv420p[v]"
+            )
+        elif estilo == "dividido":
+            gap = 40
+            bw = int((min(zona.w, ANCHO * 0.9) - gap) / 2) // 2 * 2
+            bh = int(min(ALTO * 0.62, bw * ih / iw * 1.0 if iw >= ih else ALTO * 0.62)) // 2 * 2
+            esc = min(bw / iw, bh / ih)
+            qw, qh = max(2, int(iw * esc) // 2 * 2), max(2, int(ih * esc) // 2 * 2)
+            if resaltar and len(resaltar) == 4:
+                fx, fy, fw, fh = [max(0.0, min(1.0, float(v))) for v in resaltar]
+                ccx, ccy = fx + fw / 2, fy + fh / 2
+                zf = max(1.6, min(3.0, 1.0 / max(fw, fh, 0.2)))
+            else:
+                ccx, ccy, zf = 0.5, 0.5, 2.0
+            cw, ch = 1.0 / zf, 1.0 / zf
+            x0, y0 = max(0.0, min(1 - cw, ccx - cw / 2)), max(0.0, min(1 - ch, ccy - ch / 2))
+            lx = cx - gap // 2 - qw
+            rx = cx + gap // 2
+            cy = ALTO // 2 - qh // 2 + 10
+            filtro = (
+                f"[0:v]split=3[a][b][c];{fondo}"
+                f"[b]{pre_c}scale={qw}:{qh},setsar=1{(',' + hl_box) if hl_box else ''},"
+                f"drawbox=x=0:y=0:w=iw:h=ih:color=0xFFD400@0.95:t=5[l];"
+                f"[c]{pre_c}crop=iw*{cw:.3f}:ih*{ch:.3f}:iw*{x0:.3f}:ih*{y0:.3f},scale={qw}:{qh},setsar=1,"
+                f"unsharp=5:5:0.8,drawbox=x=0:y=0:w=iw:h=ih:color=red@0.95:t=5[r];"
+                f"[bg][l]overlay=x={lx}:y={cy}:shortest=1[t1];[t1][r]overlay=x={rx}:y={cy}:shortest=1,"
+                f"drawtext=textfile='{_ruta_filtro(tmp / 'ori.txt')}'{ff}:fontsize=38:fontcolor=black:box=1:boxcolor=0xFFD400@0.95:boxborderw=10:x={lx}:y={cy}-62,"
+                f"drawtext=textfile='{_ruta_filtro(tmp / 'zoom.txt')}'{ff}:fontsize=38:fontcolor=white:box=1:boxcolor=0xC81E1E@0.95:boxborderw=10:x={rx}:y={cy}-62,"
+                f"drawtext={cred}:x={cx}-text_w/2:y={cy + qh + 26},"
+                f"fps=30,format=yuv420p[v]"
+            )
+        else:
+            pcx, pcy, pw, ph = geometria_panel(pose, host_lado, host_visible, float(rc["escala_panel"]))
+            esc_fit = min(pw / iw, ph / ih)
+            qw, qh = max(2, int(iw * esc_fit) // 2 * 2), max(2, int(ih * esc_fit) // 2 * 2)
+            if estilo == "congelado":
+                t1 = round(max(1.0, D * 0.45), 2)
+                fr = 1.0 / 30
+                cuerpo = (f"[b]{pre_c}scale={qw}:{qh},setsar=1,fps=30,split[b1][b2];"
+                          f"[b1]trim=duration={t1},setpts=PTS-STARTPTS[p1];"
+                          f"[b2]trim=start={max(0.0, t1 - fr):.3f}:duration={fr:.3f},setpts=PTS-STARTPTS,"
+                          f"loop=loop={int((D - t1) * 30) + 2}:size=1,setpts=N/30/TB,trim=duration={D - t1:.2f}[p2];"
+                          f"[p1][p2]concat=n=2:v=1:a=0,"
+                          f"scale=w='trunc({qw}*(1+{z * 1.6}*max(0,t-{t1})/{D:.2f})/2)*2':h='trunc({qh}*(1+{z * 1.6}*max(0,t-{t1})/{D:.2f})/2)*2':eval=frame,"
+                          f"crop={qw}:{qh},eq=saturation=0.75:enable='gte(t,{t1})'"
+                          f"{(',' + hl_box + ':enable=' + chr(39) + f'gte(t,{t1})' + chr(39)) if hl_box else ''},")
+                extra = (f"drawtext=textfile='{_ruta_filtro(tmp / 'frz.txt')}'{ff}:fontsize=36:fontcolor=black:box=1:"
+                         f"boxcolor=white@0.92:boxborderw=10:x={pcx}+{qw}/2-text_w-18:y={pcy}-{qh}/2+18:enable='gte(t,{t1})',")
+            else:
+                cuerpo = (f"[b]{pre_c}scale={qw}:{qh},setsar=1,"
+                          f"scale=w='trunc({qw}*(1+{z}*t/{D:.2f})/2)*2':h='trunc({qh}*(1+{z}*t/{D:.2f})/2)*2':eval=frame,"
+                          f"crop={qw}:{qh}{(',' + hl_box) if hl_box else ''},")
+                extra = ""
+            filtro = (
+                f"[0:v]split[a][b];{fondo}{cuerpo}"
+                f"drawbox=x=0:y=0:w=iw:h=ih:color=0xFFD400@0.95:t=6[pn];"
+                f"[bg][pn]overlay=x={pcx}-w/2:y={pcy}-h/2:eof_action=repeat,"
+                f"drawtext={etq}:x={pcx}-{qw}/2:y={pcy}-{qh}/2-78,{extra}"
+                f"drawtext={cred}:x={pcx}-text_w/2:y={pcy}+{qh}/2+26,"
+                f"fps=30,format=yuv420p[v]"
+            )
         ok = _run([_ffmpeg(), "-y", "-stream_loop", "-1", "-i", str(raw), "-filter_complex", filtro,
                    "-map", "[v]", "-t", f"{D:.2f}", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", str(destino)])
         return ok and destino.exists() and destino.stat().st_size > 1000
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def transformar_evidencia(raw: Path, destino: Path, duracion: float, credito: str, etiqueta: str = "EVIDENCIA",
+                          pose: str = "explicando", host_lado: str = "izquierda", host_visible: bool = True,
+                          resaltar: Optional[list[float]] = None, cfg: Optional[dict] = None) -> bool:
+    """Compatibilidad: panel 'EVIDENCIA' clásico."""
+    return transformar_real(raw, destino, duracion, credito, etiqueta, "evidencia", None, pose, host_lado,
+                            host_visible, resaltar, cfg)
 
 
 # ----------------------------------------------------------------------------- preparación por escena
@@ -280,20 +398,29 @@ def preparar_tomas_escena(p, esc, dur_audio: float, clips_usados: set[str], rech
     tomas: list[dict[str, Any]] = []
 
     # 1. Clips reales (prioridad)
+    # Si la escena abre con tarjeta (TOP #N o texto_pantalla, franja superior ~0-3.9 s), la primera toma real
+    # va a pantalla completa y dura >= 4 s: así la tarjeta nunca cae encima de un panel EVIDENCIA.
+    tiene_tarjeta = bool((getattr(esc, "texto_pantalla", "") or "").strip() or (getattr(esc, "puesto_titulo", "") or "").strip())
+    fin_tarjeta = float(rc.get("fin_tarjeta_s", 4.0))
     for j, cf in enumerate(getattr(esc, "clips_fuente", []) or [], 1):
         d = max(float(rc["duracion_min_s"]), min(float(rc["duracion_max_s"]), float(cf.duracion or 4.0)))
+        estilo = (getattr(cf, "estilo", "") or "evidencia").lower()
+        if tiene_tarjeta and not tomas:
+            estilo, d = "completo", max(d, min(float(rc["duracion_max_s"]), fin_tarjeta))
         final = carpeta / f"escena_{esc.id:03d}_real_{j:02d}.mp4"
+        firma = f"{cf.url}|{cf.inicio}|{d}|{estilo}|{getattr(cf, 'recorte', None)}|{cf.resaltar}"
         info = {"archivo": final.name, "fuente": "real", "url": cf.url, "inicio": float(cf.inicio or 0.0),
-                "duracion": d, "credito": cf.credito or "redes sociales"}
-        if final.exists() and es_video_valido(final) and previas.get(final.name, {}).get("url") == cf.url:
+                "duracion": d, "credito": cf.credito or "redes sociales", "estilo": estilo, "firma": firma}
+        if final.exists() and es_video_valido(final) and previas.get(final.name, {}).get("firma") == firma:
             tomas.append(info)
             continue
         raw = carpeta / f"escena_{esc.id:03d}_real_{j:02d}_raw.mp4"
         ok, err = descargar_fragmento_real(cf.url, float(cf.inicio or 0.0), d, raw)
         if ok:
-            ok = transformar_evidencia(raw, final, d, cf.credito, cf.etiqueta or rc["etiqueta"], esc.pose,
-                                       esc.host_lado, bool(esc.host_visible) and not sin_host, cf.resaltar, cfg)
-            err = "" if ok else "fallo al transformar panel EVIDENCIA"
+            ok = transformar_real(raw, final, d, cf.credito, cf.etiqueta or rc["etiqueta"], estilo,
+                                  getattr(cf, "recorte", None), esc.pose, esc.host_lado,
+                                  bool(esc.host_visible) and not sin_host, cf.resaltar, cfg)
+            err = "" if ok else f"fallo al transformar ({estilo})"
         raw.unlink(missing_ok=True)
         if ok:
             print(f"      🎞️ Escena {esc.id}: clip real {j} listo ({d:.1f}s, {cf.credito or cf.url})")
@@ -332,7 +459,7 @@ def preparar_tomas_escena(p, esc, dur_audio: float, clips_usados: set[str], rech
             destino = carpeta / f"escena_{esc.id:03d}_t{k:02d}.mp4"
             if not descargar_archivo_directo(c.get("url_medium") or c["url"], destino):
                 continue
-            ok, motivo, _met = analizar_calidad_visual_clip(destino, formato="16:9", min_yavg=25.0, es_fuente_youtube=False)
+            ok, motivo, _met = analizar_calidad_visual_clip(destino, formato="16:9", min_yavg=float(rc.get("min_yavg_relleno", 35.0)), es_fuente_youtube=False)
             if not ok:
                 destino.unlink(missing_ok=True)
                 rechazos_esc.append({"fuente": c["fuente"], "candidato": c["key"], "url": c["url"], "motivo": f"Toma extra: {motivo}"})
