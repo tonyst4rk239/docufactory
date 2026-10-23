@@ -9,9 +9,9 @@ def render_deluxe_master():
     cards_dir = f'{root}/temp/title_cards'
     broll_dir = f'{root}/assets/broll_viral'
     audio_dir = f'{root}/assets/audio/video_1_ia'
-    music_track = f'{root}/assets/music/misterio/bg_soundtrack.wav'
-    sfx_teclado = f'{root}/assets/sfx/teclado/typing_corto_boosted.wav'
-    sfx_trans = f'{root}/assets/sfx/transicion/pop_transicion.wav'
+    music_track = f'{root}/assets/music/misterio/freepd_asking_questions.mp3'
+    sfx_teclado = f'{root}/assets/sfx/teclado/typing_corto.wav'
+    sfx_trans = f'{root}/assets/sfx/transicion/transicion_pop.wav'
     output_dir = f'{root}/output'
 
     os.makedirs(cards_dir, exist_ok=True)

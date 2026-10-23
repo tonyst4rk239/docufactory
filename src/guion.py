@@ -328,6 +328,29 @@ def extraer_top_n(tema: str, minutos: float = 8.5) -> int:
     return max(3, min(10, round(minutos / 1.6)))
 
 
+def top_n_explicito(guion_obj: "Optional[Guion]" = None, tema: str = "") -> Optional[int]:
+    """Devuelve N SOLO si el contenido es de verdad un ranking/lista; si no, None (sin tarjetas TOP #N).
+
+    Fuentes válidas, en orden: `top_n` numérico del guion, `puesto` explícito en alguna escena, o un título
+    con formato de lista explícito ("Top 5 ...", "Ranking 10 ...", "Los 7 ...", "5 casos ..."). Nunca se
+    infiere por duración: un documental normal (top_n null) no lleva títulos TOP.
+    """
+    if guion_obj is not None:
+        n = getattr(guion_obj, "top_n", None)
+        if isinstance(n, int) and n >= 1:
+            return n
+        puestos = [e.puesto for e in (getattr(guion_obj, "escenas", None) or []) if isinstance(e.puesto, int) and e.puesto > 0]
+        if puestos:
+            return max(puestos)
+        tema = tema or getattr(guion_obj, "titulo_trabajo", "") or ""
+    if tema:
+        m = re.search(r"\b(?:top|ranking|los|las|mis)\s+(\d{1,2})\b", tema, re.IGNORECASE) or \
+            re.search(r"^\s*(\d{1,2})\s+[a-záéíóúñ]{3,}", tema, re.IGNORECASE)
+        if m and 1 <= int(m.group(1)) <= 15:
+            return int(m.group(1))
+    return None
+
+
 def _formatear_lista_puestos(top_n: int) -> str:
     puestos = [f"#{i}" for i in range(top_n, 0, -1)]
     if len(puestos) <= 1:
@@ -347,10 +370,10 @@ def _limpiar_titulo_puesto(texto: str, r: int) -> str:
     return limpio.upper()
 
 
-def asegurar_tarjetas_top(guion_obj: Guion, top_n: int) -> Guion:
+def asegurar_tarjetas_top(guion_obj: Guion, top_n: Optional[int]) -> Guion:
     """Garantiza que cada puesto del ranking (#N..#1) tenga una escena de apertura con puesto, puesto_titulo y texto_pantalla '#N: TITULO'."""
     escenas = guion_obj.escenas
-    if not escenas or top_n < 1:
+    if not escenas or not top_n or top_n < 1:
         return guion_obj
 
     # Ajustar top_n si hay menos escenas que puestos
@@ -813,15 +836,8 @@ def validar_json_externo(
         )  # type: ignore[assignment]
 
     if (formato_esperado or guion_obj.formato) == "16:9":
-        top_n_detectado = guion_obj.top_n
-        if not top_n_detectado:
-            puestos_en_escenas = [e.puesto for e in guion_obj.escenas if e.puesto and e.puesto > 0]
-            if puestos_en_escenas:
-                top_n_detectado = max(puestos_en_escenas)
-            else:
-                pal_tot = sum(_contar_palabras_habladas(e.voz) for e in guion_obj.escenas)
-                min_est = guion_obj.minutos or round(max(0.5, pal_tot / float(config.PALABRAS_POR_MIN)), 2)
-                top_n_detectado = extraer_top_n(guion_obj.titulo_trabajo, min_est)
+        # Solo hay tarjetas TOP #N si el guion es un ranking explícito (top_n, puestos o título de lista)
+        top_n_detectado = top_n_explicito(guion_obj)
         guion_obj.top_n = top_n_detectado
         asegurar_tarjetas_top(guion_obj, top_n=top_n_detectado)
 

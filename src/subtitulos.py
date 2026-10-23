@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from . import config
 from .estado import Proyecto
-from .guion import cargar_guion, extraer_top_n, asegurar_tarjetas_top
+from .guion import cargar_guion, asegurar_tarjetas_top, top_n_explicito
 from .voz import limpiar_tags_ssml
 
 
@@ -63,8 +63,7 @@ def generar_tarjetas_ass(p: Proyecto, duraciones: dict[int, float]) -> Path:
     from .edicion import cargar_config_edicion
 
     guion = cargar_guion(p)
-    minutos = float(p.datos.get("minutos", 1.0))
-    top_n = guion.top_n or extraer_top_n(p.tema, minutos)
+    top_n = top_n_explicito(guion, p.tema)
     asegurar_tarjetas_top(guion, top_n=top_n)
 
     cfg = cargar_config_edicion()

@@ -9,7 +9,7 @@ def run():
         timeline = json.load(f)
 
     audio_dir = 'C:/Users/coazo/docu_factory/assets/audio/video_1_ia'
-    music_track = 'C:/Users/coazo/docu_factory/assets/music/misterio/bg_soundtrack.wav'
+    music_track = 'C:/Users/coazo/docu_factory/assets/music/misterio/freepd_asking_questions.mp3'
     output_dir = 'C:/Users/coazo/docu_factory/output'
     os.makedirs(output_dir, exist_ok=True)
 

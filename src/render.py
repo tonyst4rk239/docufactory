@@ -27,7 +27,7 @@ from .edicion import (
     resolver_overlay_por_mood,
 )
 from .estado import Proyecto
-from .guion import cargar_guion, Guion, Escena, extraer_top_n, asegurar_tarjetas_top
+from .guion import cargar_guion, Guion, Escena, asegurar_tarjetas_top, top_n_explicito
 from .host_anim import obtener_sprite
 
 
@@ -44,14 +44,96 @@ def _ejecutar_cmd(cmd: list[str]) -> bool:
 _AVISOS_ASSETS_EMITIDOS: set[str] = set()
 
 
-def listar_archivos_audio(carpeta: Path) -> list[Path]:
-    """Lista archivos de audio (.wav, .mp3, .ogg) válidos en una carpeta."""
+# Validación de assets de audio: evita que un SFX/música corrupto, recortado (clipping) o con frecuencia de
+# muestreo anómala llegue a la mezcla. Resultado cacheado por (ruta, tamaño, mtime) durante el proceso.
+_CACHE_VALIDACION_AUDIO: dict[tuple[str, int, float], tuple[bool, str]] = {}
+SFX_PICO_MAX_DBFS = -0.5          # SFX con pico >= -0.5 dBFS se consideran recortados/sin headroom
+SFX_DURACION_MAX_S = 10.0         # un SFX más largo es casi seguro un archivo equivocado
+SR_VALIDAS = (22050, 24000, 32000, 44100, 48000)
+
+
+def validar_audio_asset(ruta: Path, tipo: str = "sfx") -> tuple[bool, str]:
+    """Comprueba que un asset de audio decodifique sin errores y, si es SFX, que no esté recortado.
+
+    Checks (ffprobe/ffmpeg, multiplataforma): decodificación completa sin errores, sample rate razonable,
+    duración > 0 (y <= 10 s para SFX), y para SFX pico < -0.5 dBFS y sin muestras a escala completa.
+    Devuelve (ok, motivo).
+    """
+    try:
+        st = ruta.stat()
+    except OSError as e:
+        return False, f"no accesible: {e}"
+    clave = (str(ruta), st.st_size, st.st_mtime)
+    if clave in _CACHE_VALIDACION_AUDIO:
+        return _CACHE_VALIDACION_AUDIO[clave]
+
+    def _fin(ok: bool, motivo: str) -> tuple[bool, str]:
+        _CACHE_VALIDACION_AUDIO[clave] = (ok, motivo)
+        if not ok:
+            aviso = f"audio_invalido:{ruta}"
+            if aviso not in _AVISOS_ASSETS_EMITIDOS:
+                _AVISOS_ASSETS_EMITIDOS.add(aviso)
+                print(f"   🚫 Asset de audio descartado ({tipo}): {ruta.name} -> {motivo}")
+        return ok, motivo
+
+    if st.st_size < 1000:
+        return _fin(False, "archivo vacío o truncado")
+    try:
+        pr = subprocess.run(
+            [config.ffmpeg_bin("ffprobe"), "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=sample_rate:format=duration", "-of", "default=nw=1", str(ruta)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=30)
+        datos = dict(l.split("=", 1) for l in pr.stdout.splitlines() if "=" in l)
+        sr = int(float(datos.get("sample_rate") or 0))
+        dur = float(datos.get("duration") or 0)
+    except Exception as e:
+        return _fin(False, f"ffprobe falló: {e}")
+    if sr not in SR_VALIDAS:
+        return _fin(False, f"sample rate anómalo ({sr} Hz)")
+    if dur <= 0.03:
+        return _fin(False, "duración nula")
+    if tipo == "sfx" and dur > SFX_DURACION_MAX_S:
+        return _fin(False, f"demasiado largo para SFX ({dur:.1f} s)")
+    try:
+        dec = subprocess.run(
+            [config.ffmpeg_bin("ffmpeg"), "-hide_banner", "-nostats", "-v", "error", "-i", str(ruta),
+             "-f", "null", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=120)
+    except Exception as e:
+        return _fin(False, f"decodificación falló: {e}")
+    errores = [l for l in dec.stderr.splitlines() if l.strip()]
+    if dec.returncode != 0 or errores:
+        return _fin(False, f"errores de decodificación ({(errores or ['rc=' + str(dec.returncode)])[0][:90]})")
+    if tipo == "sfx":
+        # Pico real con una segunda pasada (astats imprime en nivel info)
+        try:
+            pk = subprocess.run(
+                [config.ffmpeg_bin("ffmpeg"), "-hide_banner", "-nostats", "-i", str(ruta),
+                 "-af", "astats=metadata=0", "-f", "null", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=120)
+            picos = [float(m) for m in re.findall(r"Peak level dB:\s*(-?[\d.]+|-inf)", pk.stderr) if m != "-inf"]
+        except Exception:
+            picos = []
+        if picos and max(picos) >= SFX_PICO_MAX_DBFS:
+            return _fin(False, f"clipping / sin headroom (pico {max(picos):.2f} dBFS)")
+    return _fin(True, "ok")
+
+
+def listar_archivos_audio(carpeta: Path, tipo: Optional[str] = None, validar: bool = True) -> list[Path]:
+    """Lista archivos de audio (.mp3, .ogg, .wav) válidos en una carpeta, descartando los corruptos/recortados.
+
+    `tipo` ('sfx' o 'musica') se infiere de la ruta si no se indica."""
     if not carpeta.exists() or not carpeta.is_dir():
         return []
+    if tipo is None:
+        tipo = "sfx" if Path(config.SFX_DIR).resolve() in carpeta.resolve().parents else "musica"
     archivos: list[Path] = []
     for ext in ("*.wav", "*.mp3", "*.ogg"):
         archivos.extend(sorted(carpeta.glob(ext)))
-    return [a for a in archivos if a.is_file() and a.stat().st_size > 0]
+    archivos = [a for a in archivos if a.is_file() and a.stat().st_size > 0]
+    if validar:
+        archivos = [a for a in archivos if validar_audio_asset(a, tipo)[0]]
+    return archivos
 
 
 def resolver_sfx_categoria(cat: str, silencioso: bool = False) -> tuple[Optional[Path], str, bool]:
@@ -65,9 +147,9 @@ def resolver_sfx_categoria(cat: str, silencioso: bool = False) -> tuple[Optional
         if not carpeta.exists():
             return None
         if c == "teclado":
-            for pref in ("typing_corto_boosted.wav", "typing_corto.wav"):
+            for pref in ("typing_corto.wav",):
                 p_pref = carpeta / pref
-                if p_pref.exists() and p_pref.stat().st_size > 0:
+                if p_pref.exists() and p_pref.stat().st_size > 0 and validar_audio_asset(p_pref, "sfx")[0]:
                     return p_pref
         archivos = listar_archivos_audio(carpeta)
         return archivos[0] if archivos else None
@@ -114,7 +196,8 @@ def resolver_musica_mood(mood: str = "misterio", silencioso: bool = False) -> tu
                 )
             return archivos_fb[0], fb, True
 
-    archivos_todos = list(config.MUSIC_DIR.glob("*/*.wav")) + list(config.MUSIC_DIR.glob("*/*.mp3")) + list(config.MUSIC_DIR.glob("*/*.ogg"))
+    archivos_todos = [a for a in list(config.MUSIC_DIR.glob("*/*.wav")) + list(config.MUSIC_DIR.glob("*/*.mp3"))
+                      + list(config.MUSIC_DIR.glob("*/*.ogg")) if validar_audio_asset(a, "musica")[0]]
     if archivos_todos:
         return archivos_todos[0], archivos_todos[0].parent.name, True
     return None, mood_limpio, True
@@ -139,7 +222,7 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
     carpeta_stems = p.carpeta / "stems"
     carpeta_stems.mkdir(parents=True, exist_ok=True)
     guion = cargar_guion(p)
-    asegurar_tarjetas_top(guion, top_n=extraer_top_n(p.tema, float(p.datos.get("minutos", 1.0))))
+    asegurar_tarjetas_top(guion, top_n=top_n_explicito(guion, p.tema))
     duracion_total = sum(duraciones.values())
 
     # 1. PISTA DE VOZ (IA o Reemplazo Humano) — conserva intacta la masterización -16 LUFS y highpass 80 Hz
@@ -267,7 +350,7 @@ def crear_stems_audio(p: Proyecto, duraciones: dict[int, float], audio_voz_reemp
             )
             mix_labels.append(f"[sfx{idx}]")
 
-        cadena_mix = f"{';'.join(filtros_delay)};{''.join(mix_labels)}amix=inputs={len(mix_labels)}:normalize=0[mde_out]"
+        cadena_mix = f"{';'.join(filtros_delay)};{''.join(mix_labels)}amix=inputs={len(mix_labels)}:normalize=0,alimiter=limit=0.89:level=disabled[mde_out]"
         cmd_mezcla_total = [
             ffmpeg, "-y",
             *inputs,
@@ -561,7 +644,7 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
     cfg = cargar_config_edicion()
     fmt_cfg = cfg.get("formatos", {}).get("horizontal_16_9", {})
     guion = cargar_guion(p)
-    asegurar_tarjetas_top(guion, top_n=extraer_top_n(p.tema, float(p.datos.get("minutos", 1.0))))
+    asegurar_tarjetas_top(guion, top_n=top_n_explicito(guion, p.tema))
 
     carpeta_renders = p.carpeta / "renders"
     carpeta_renders.mkdir(parents=True, exist_ok=True)
