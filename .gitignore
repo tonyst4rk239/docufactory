@@ -33,3 +33,6 @@ test_scene8.mp4
 test_ass.mp4
 *cookies*.txt
 cookies.txt
+
+# Reportes generados por scripts/metricas_semanales.py
+reportes/
