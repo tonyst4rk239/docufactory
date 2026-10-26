@@ -10,6 +10,53 @@ from .estado import Proyecto
 from .guion import cargar_guion
 
 
+# YouTube rechaza descripciones de más de 5000 caracteres.
+LIMITE_DESCRIPCION_YT = 5000
+ENCABEZADO_CREDITOS = "🎨 CRÉDITOS VISUALES Y B-ROLL (stock y licencias abiertas):"
+_MARCAS_CREDITOS = ("creative commons", "cc by", "créditos", "creditos")
+
+
+def _ya_trae_creditos(texto: str) -> bool:
+    t = (texto or "").lower()
+    return any(m in t for m in _MARCAS_CREDITOS)
+
+
+def armar_descripcion_youtube(
+    cuerpo: str,
+    capitulos: list[str],
+    lineas_creditos: list[str],
+    limite: int = LIMITE_DESCRIPCION_YT,
+) -> tuple[str, list[str]]:
+    """Arma la descripción final sin pasar de `limite` caracteres.
+
+    Si el cuerpo ya trae sus créditos, no se agrega el bloque automático.
+    Si el bloque no cabe, se recorta y se deja una nota que remite a la lista
+    completa. Devuelve el texto y las líneas de crédito que quedaron fuera.
+    """
+    cuerpo = (cuerpo or "").strip()
+    cabeza = f"{cuerpo}\n\n📌 CAPÍTULOS:\n" + "\n".join(capitulos)
+    if "fuentes" not in cuerpo.lower():
+        cabeza += "\n\n📚 FUENTES Y RECURSOS:\nVerificadas con el archivo de investigación del proyecto."
+    cola = "\n\n---\n#Documental #Misterio #Historia #Investigacion"
+
+    lineas = [] if _ya_trae_creditos(cuerpo) else list(lineas_creditos)
+    omitidas: list[str] = []
+
+    def _bloque(ls: list[str], faltan: int) -> str:
+        if not ls and not faltan:
+            return ""
+        nota = [f"…y {faltan} créditos más (lista completa en creditos_completos.txt del paquete)."] if faltan else []
+        return f"\n\n{ENCABEZADO_CREDITOS}\n" + "\n".join(ls + nota)
+
+    texto = cabeza + _bloque(lineas, 0) + cola
+    while len(texto) > limite and lineas:
+        omitidas.insert(0, lineas.pop())
+        texto = cabeza + _bloque(lineas, len(omitidas)) + cola
+    if len(texto) > limite:
+        texto = texto[: limite - 1].rstrip() + "…"
+    return texto, omitidas
+
+
 def etapa_publicacion(p: Proyecto, duraciones: dict[int, float]) -> None:
     guion = cargar_guion(p)
     carpeta = p.ruta("publicacion")
@@ -46,23 +93,23 @@ def etapa_publicacion(p: Proyecto, duraciones: dict[int, float]) -> None:
 
     # Leer créditos de B-Roll
     ruta_creditos = p.ruta("b_roll", "creditos.json")
-    creditos_txt = ""
+    lineas_creditos: list[str] = []
     if ruta_creditos.exists():
         datos_cred = json.loads(ruta_creditos.read_text("utf-8"))
         lineas_c = [f"- {c.get('credito', c.get('fuente', 'Clip de Archivo'))} (Escena {c.get('escena')})" for c in datos_cred]
-        creditos_txt = "\n".join(sorted(set(lineas_c)))
+        lineas_creditos = sorted(set(lineas_c))
 
     yt_meta = getattr(guion, "youtube_metadata", None)
     texto_gen = ""
+    cuerpo_desc = ""
     if yt_meta and (yt_meta.titulos or yt_meta.descripcion or yt_meta.tags):
         partes_yt = []
         if yt_meta.titulos:
             partes_yt.append("🎯 TÍTULOS SUGERIDOS (GUIÓN IMPORTADO):\n" + "\n".join(f"- {t_it}" for t_it in yt_meta.titulos))
-        if yt_meta.descripcion:
-            partes_yt.append(f"📝 DESCRIPCIÓN:\n{yt_meta.descripcion.strip()}")
         if yt_meta.tags:
             partes_yt.append("🏷️ TAGS:\n" + ", ".join(yt_meta.tags))
         texto_gen = "\n\n".join(partes_yt)
+        cuerpo_desc = (yt_meta.descripcion or guion.resumen or f"Documental sobre {p.tema}.").strip()
     elif config.GEMINI_API_KEY:
         try:
             client = genai.Client(api_key=config.GEMINI_API_KEY)
@@ -87,20 +134,17 @@ def etapa_publicacion(p: Proyecto, duraciones: dict[int, float]) -> None:
             f"🏷️ TAGS:\ndocumental, misterio, historia, investigacion, top"
         )
 
-    descripcion_final = f"""{texto_gen}
+    descripcion_yt, omitidas = armar_descripcion_youtube(cuerpo_desc or texto_gen, capitulos, lineas_creditos)
+    if omitidas:
+        (carpeta / "creditos_completos.txt").write_text("\n".join(lineas_creditos) + "\n", "utf-8")
+        print(f"⚠️ {len(omitidas)} créditos no cupieron en la descripción; lista completa en creditos_completos.txt")
+    (carpeta / "descripcion_youtube.txt").write_text(descripcion_yt, "utf-8")
+    print(f"📝 Descripción de YouTube: {len(descripcion_yt)}/{LIMITE_DESCRIPCION_YT} caracteres")
 
-📌 CAPÍTULOS:
-{chr(10).join(capitulos)}
-
-📚 FUENTES Y RECURSOS:
-Verificadas con el archivo de investigación del proyecto.
-
-🎨 CRÉDITOS VISUALES Y B-ROLL (Uso Justo / Licencias Abiertas):
-{creditos_txt}
-
----
-#Documental #Misterio #Historia #Investigacion
-"""
+    if cuerpo_desc:
+        descripcion_final = f"{texto_gen}\n\n📝 DESCRIPCIÓN (lista para YouTube):\n{descripcion_yt}\n"
+    else:
+        descripcion_final = f"{descripcion_yt}\n"
     (carpeta / "paquete_youtube.txt").write_text(descripcion_final, "utf-8")
     
     # Auto-generar miniaturas oficiales 1080p y 720p en carpeta publicacion/
