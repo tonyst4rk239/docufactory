@@ -111,8 +111,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
             numero = esc.puesto
             titulo = esc.puesto_titulo.strip()
         elif txt:
-            m = re.search(r"(?:TOP\s*)?(?:PUESTO\s*)?#?\s*(\d{1,2})\s*[:\-\.\–—]*\s*(.*)", txt, re.IGNORECASE)
-            if m and (txt.startswith("#") or "top" in txt.lower() or "puesto" in txt.lower() or esc.puesto):
+            # Solo es tarjeta si el texto ARRANCA con "#N", "TOP N" o "PUESTO N"; una fecha como
+            # "1 NOV – 10 DIC 2017" o "17 DE JULIO" dentro de un puesto no es un número de puesto.
+            m = re.match(r"\s*(?:TOP\s*#?|PUESTO\s*#?|#)\s*(\d{1,2})\b\s*[:\-\.\–—]*\s*(.*)", txt, re.IGNORECASE)
+            if m:
                 cand_num = int(m.group(1))
                 if cand_num not in puestos_emitidos:
                     numero = cand_num
