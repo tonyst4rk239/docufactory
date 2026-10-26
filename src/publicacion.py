@@ -10,10 +10,18 @@ from .estado import Proyecto
 from .guion import cargar_guion
 
 
-# YouTube rechaza descripciones de más de 5000 caracteres.
-LIMITE_DESCRIPCION_YT = 5000
+# La API de YouTube limita snippet.description a 5000 bytes en UTF-8, no a 5000 caracteres.
+LIMITE_DESCRIPCION_YT_BYTES = 5000
 ENCABEZADO_CREDITOS = "🎨 CRÉDITOS VISUALES Y B-ROLL (stock y licencias abiertas):"
 _MARCAS_CREDITOS = ("creative commons", "cc by", "créditos", "creditos")
+
+
+class DescripcionDemasiadoLarga(ValueError):
+    """La descripción pasa del límite de YouTube. Nunca se recortan créditos en silencio."""
+
+
+def bytes_utf8(texto: str) -> int:
+    return len(texto.encode("utf-8"))
 
 
 def _ya_trae_creditos(texto: str) -> bool:
@@ -25,36 +33,29 @@ def armar_descripcion_youtube(
     cuerpo: str,
     capitulos: list[str],
     lineas_creditos: list[str],
-    limite: int = LIMITE_DESCRIPCION_YT,
-) -> tuple[str, list[str]]:
-    """Arma la descripción final sin pasar de `limite` caracteres.
+    limite_bytes: int = LIMITE_DESCRIPCION_YT_BYTES,
+) -> str:
+    """Arma la descripción final de YouTube.
 
     Si el cuerpo ya trae sus créditos, no se agrega el bloque automático.
-    Si el bloque no cabe, se recorta y se deja una nota que remite a la lista
-    completa. Devuelve el texto y las líneas de crédito que quedaron fuera.
+    Si el texto pasa de `limite_bytes` en UTF-8, lanza DescripcionDemasiadoLarga:
+    hay que acortar el texto que no es crédito en el guion, no los créditos.
     """
     cuerpo = (cuerpo or "").strip()
-    cabeza = f"{cuerpo}\n\n📌 CAPÍTULOS:\n" + "\n".join(capitulos)
+    partes = [cuerpo, "📌 CAPÍTULOS:\n" + "\n".join(capitulos)]
     if "fuentes" not in cuerpo.lower():
-        cabeza += "\n\n📚 FUENTES Y RECURSOS:\nVerificadas con el archivo de investigación del proyecto."
-    cola = "\n\n---\n#Documental #Misterio #Historia #Investigacion"
-
-    lineas = [] if _ya_trae_creditos(cuerpo) else list(lineas_creditos)
-    omitidas: list[str] = []
-
-    def _bloque(ls: list[str], faltan: int) -> str:
-        if not ls and not faltan:
-            return ""
-        nota = [f"…y {faltan} créditos más (lista completa en creditos_completos.txt del paquete)."] if faltan else []
-        return f"\n\n{ENCABEZADO_CREDITOS}\n" + "\n".join(ls + nota)
-
-    texto = cabeza + _bloque(lineas, 0) + cola
-    while len(texto) > limite and lineas:
-        omitidas.insert(0, lineas.pop())
-        texto = cabeza + _bloque(lineas, len(omitidas)) + cola
-    if len(texto) > limite:
-        texto = texto[: limite - 1].rstrip() + "…"
-    return texto, omitidas
+        partes.append("📚 FUENTES Y RECURSOS:\nVerificadas con el archivo de investigación del proyecto.")
+    if lineas_creditos and not _ya_trae_creditos(cuerpo):
+        partes.append(ENCABEZADO_CREDITOS + "\n" + "\n".join(lineas_creditos))
+    partes.append("---\n#Documental #Misterio #Historia #Investigacion")
+    texto = "\n\n".join(partes)
+    n = bytes_utf8(texto)
+    if n > limite_bytes:
+        raise DescripcionDemasiadoLarga(
+            f"La descripción de YouTube mide {n} bytes UTF-8 ({len(texto)} caracteres) y el límite es "
+            f"{limite_bytes}. Acorta en el guion el texto que no es crédito; los créditos no se recortan."
+        )
+    return texto
 
 
 def etapa_publicacion(p: Proyecto, duraciones: dict[int, float]) -> None:
@@ -134,12 +135,9 @@ def etapa_publicacion(p: Proyecto, duraciones: dict[int, float]) -> None:
             f"🏷️ TAGS:\ndocumental, misterio, historia, investigacion, top"
         )
 
-    descripcion_yt, omitidas = armar_descripcion_youtube(cuerpo_desc or texto_gen, capitulos, lineas_creditos)
-    if omitidas:
-        (carpeta / "creditos_completos.txt").write_text("\n".join(lineas_creditos) + "\n", "utf-8")
-        print(f"⚠️ {len(omitidas)} créditos no cupieron en la descripción; lista completa en creditos_completos.txt")
+    descripcion_yt = armar_descripcion_youtube(cuerpo_desc or texto_gen, capitulos, lineas_creditos)
     (carpeta / "descripcion_youtube.txt").write_text(descripcion_yt, "utf-8")
-    print(f"📝 Descripción de YouTube: {len(descripcion_yt)}/{LIMITE_DESCRIPCION_YT} caracteres")
+    print(f"📝 Descripción de YouTube: {bytes_utf8(descripcion_yt)}/{LIMITE_DESCRIPCION_YT_BYTES} bytes UTF-8 ({len(descripcion_yt)} caracteres)")
 
     if cuerpo_desc:
         descripcion_final = f"{texto_gen}\n\n📝 DESCRIPCIÓN (lista para YouTube):\n{descripcion_yt}\n"
