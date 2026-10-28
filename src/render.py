@@ -794,6 +794,14 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
     ]
     _ejecutar_cmd(cmd_clean)
 
+    # 6. Tarjeta final de créditos CC BY/BY-SA (título, autor, licencia y enlace de cada obra)
+    try:
+        from .creditos_finales import anexar_creditos_finales
+        anexar_creditos_finales(p, [video_con_voz, video_sin_voz], ffmpeg=ffmpeg, cfg=cfg)
+    except Exception as e:
+        print(f"❌ No se pudo anexar la tarjeta final de créditos: {e}")
+        raise
+
     p.marcar("render", "ok")
     return {
         "voz_master": voz_master,

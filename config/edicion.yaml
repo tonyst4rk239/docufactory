@@ -169,3 +169,12 @@ clips_reales:
   desenfoque_fondo: 22
   yavg_realce: 55        # fragmentos reales más oscuros que esto se aclaran (gamma) para evitar tomas casi negras
   fin_tarjeta_s: 4.0     # con tarjeta TOP/texto, la 1.ª toma real va a pantalla completa y dura >= 4 s
+
+# ------------------------------------------------------------------------------
+# Tarjeta final de créditos: obras CC BY / CC BY-SA con título, autor, licencia y enlace
+# (se anexa al final del largo; la descripción de YouTube puede llevar solo el resumen)
+# ------------------------------------------------------------------------------
+creditos_finales:
+  enabled: true
+  obras_por_pagina: 9
+  segundos_por_pagina: 3.0
