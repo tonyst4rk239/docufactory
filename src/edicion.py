@@ -251,14 +251,20 @@ def cargar_config_edicion() -> dict[str, Any]:
     return copy.deepcopy(DEFAULT_EDICION_CONFIG)
 
 
-def listar_archivos_overlay(carpeta: Path) -> list[Path]:
-    """Lista videos de overlay (.mp4, .mov, .webm) válidos en una carpeta."""
+# Overlays retirados del pool: muestran texto legible (p. ej. 27706 es código fuente C# de Unity) que
+# se lee sobre fondos oscuros al mezclarse en screen. Se excluyen aunque el archivo siga en la carpeta.
+OVERLAYS_BLOQUEADOS: frozenset[str] = frozenset({"glitch_pixabay_27706.mp4"})
+
+
+def listar_archivos_overlay(carpeta: Path, bloqueados: Optional[set[str]] = None) -> list[Path]:
+    """Lista videos de overlay (.mp4, .mov, .webm) válidos en una carpeta, sin los bloqueados."""
     if not carpeta.exists() or not carpeta.is_dir():
         return []
+    fuera = {b.lower() for b in (OVERLAYS_BLOQUEADOS | set(bloqueados or ()))}
     archivos: list[Path] = []
     for ext in ("*.mp4", "*.mov", "*.webm"):
         archivos.extend(sorted(carpeta.glob(ext)))
-    return [a for a in archivos if a.is_file() and a.stat().st_size > 10_000]
+    return [a for a in archivos if a.is_file() and a.stat().st_size > 10_000 and a.name.lower() not in fuera]
 
 
 def resolver_overlay_por_mood(
@@ -286,7 +292,7 @@ def resolver_overlay_por_mood(
             preferidos.append(t)
 
     for i, tipo in enumerate(preferidos):
-        archivos = listar_archivos_overlay(config.OVERLAYS_DIR / tipo)
+        archivos = listar_archivos_overlay(config.OVERLAYS_DIR / tipo, set(ov_cfg.get("bloqueados", []) or []))
         if archivos:
             elegido = archivos[(idx_escena - 1) % len(archivos)]
             if i > 0 and not silencioso:
