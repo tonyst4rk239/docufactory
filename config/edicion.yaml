@@ -177,4 +177,4 @@ clips_reales:
 creditos_finales:
   enabled: true
   obras_por_pagina: 9
-  segundos_por_pagina: 3.0
+  segundos_por_pagina: 9.0
