@@ -25,6 +25,7 @@ from .edicion import (
     construir_filtro_color_textura,
     construir_filtro_ken_burns,
     resolver_overlay_por_mood,
+    preparar_overlay_util,
 )
 from .estado import Proyecto
 from .guion import cargar_guion, Guion, Escena, asegurar_tarjetas_top, top_n_explicito
@@ -507,6 +508,7 @@ def renderizar_clip_visual(
             silencioso=False,
         )
         if ruta_ov and ruta_ov.exists():
+            ruta_ov = preparar_overlay_util(ruta_ov, ov_cfg, ffmpeg=ffmpeg)
             ov_idx = num_inputs
             num_inputs += 1
             inputs += ["-stream_loop", "-1", "-i", str(ruta_ov)]

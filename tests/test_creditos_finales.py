@@ -80,3 +80,26 @@ def test_anexar_creditos_finales_alarga_el_video(tmp_path):
 def test_desactivado_no_toca_nada(tmp_path):
     p = SimpleNamespace(carpeta=tmp_path, ruta=lambda *a: tmp_path.joinpath(*a))
     assert cf.anexar_creditos_finales(p, [], ffmpeg="ffmpeg", cfg={"creditos_finales": {"enabled": False}}) is None
+
+
+def _rms_db(f, ss=0.0, t=None):
+    out = subprocess.run(["ffmpeg", "-v", "info", "-ss", str(ss), *(["-t", str(t)] if t else []), "-i", str(f), "-af", "astats=measure_overall=RMS_level", "-f", "null", "-"],
+                         capture_output=True, text=True).stderr
+    vals = [l.split(":")[-1].strip() for l in out.splitlines() if "RMS level dB" in l]
+    return float(vals[-1]) if vals and vals[-1] not in ("-inf", "inf") else float("-inf")
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="requiere ffmpeg")
+def test_tarjeta_con_cama_musical_bajita(tmp_path):
+    from PIL import Image
+    pag = tmp_path / "p1.png"
+    Image.new("RGB", (1920, 1080), "black").save(pag)
+    musica = tmp_path / "m.wav"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=44100:duration=1",
+                    "-ac", "2", str(musica)], check=True)
+    silencio = cf.video_desde_paginas([pag], tmp_path / "s.mp4", seg_por_pagina=4.0)
+    con = cf.video_desde_paginas([pag], tmp_path / "c.mp4", seg_por_pagina=4.0, musica=musica, musica_volumen=0.12)
+    assert _rms_db(silencio) == float("-inf") or _rms_db(silencio) < -80
+    medio = _rms_db(con, ss=2.0, t=0.5)      # la pista dura 1 s: sólo suena aquí si va en bucle
+    assert -50 < medio < -25                 # suena, y bajita (0.12 = -18 dB sobre la pista)
+    assert abs(_dur(con) - 4.0) < 0.2

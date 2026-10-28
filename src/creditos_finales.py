@@ -135,8 +135,9 @@ def _run(cmd: list[str]) -> None:
 
 
 def video_desde_paginas(paginas: list[Path], destino: Path, ffmpeg: str = "ffmpeg", seg_por_pagina: float = 3.0,
-                        fundido: float = 0.25) -> Path:
-    """Une las páginas en un MP4 H.264 1920x1080 30 fps con AAC estéreo 44.1 kHz en silencio."""
+                        fundido: float = 0.25, musica: Optional[Path] = None, musica_volumen: float = 0.12) -> Path:
+    """Une las páginas en un MP4 H.264 1920x1080 30 fps con AAC estéreo 44.1 kHz.
+    Con `musica`, la cama musical suena bajita (en bucle, con fundidos) en vez de silencio."""
     if not paginas:
         raise ValueError("No hay páginas de créditos")
     destino = Path(destino)
@@ -150,8 +151,15 @@ def video_desde_paginas(paginas: list[Path], destino: Path, ffmpeg: str = "ffmpe
     total = seg_por_pagina * len(paginas)
     n = len(paginas)
     filtros.append("".join(f"[p{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[v]")
-    inputs += ["-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
-    _run([ffmpeg, "-y", *inputs, "-filter_complex", ";".join(filtros), "-map", "[v]", "-map", f"{n}:a",
+    if musica and Path(musica).exists():
+        inputs += ["-stream_loop", "-1", "-i", str(Path(musica))]
+        filtros.append(f"[{n}:a]aformat=sample_rates=44100:channel_layouts=stereo,atrim=0:{total:.3f},asetpts=PTS-STARTPTS,"
+                       f"volume={musica_volumen:.3f},afade=t=in:st=0:d=1.5,afade=t=out:st={max(0.0, total - 3.0):.3f}:d=3[a]")
+        mapa_audio = "[a]"
+    else:
+        inputs += ["-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
+        mapa_audio = f"{n}:a"
+    _run([ffmpeg, "-y", *inputs, "-filter_complex", ";".join(filtros), "-map", "[v]", "-map", mapa_audio,
           "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
           "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-t", f"{total:.3f}", str(destino)])
     return destino
@@ -184,8 +192,19 @@ def anexar_creditos_finales(p, videos: list[Path], ffmpeg: str, cfg: Optional[di
     carpeta = p.carpeta / "renders" / "creditos_finales"
     por_pagina = int(cc.get("obras_por_pagina", 9))
     paginas = render_paginas(obras, carpeta, ruta_fuente=config.FONTS_DIR / "bold.ttf", por_pagina=por_pagina)
+    musica = None
+    if cc.get("musica", True):
+        try:
+            from .guion import cargar_guion
+            from .render import resolver_musica_mood
+            g = cargar_guion(p)
+            musica, _, _ = resolver_musica_mood(g.escenas[0].music_mood if g.escenas else "misterio", silencioso=True)
+        except Exception as e:   # sin música no se rompe la tarjeta: queda en silencio
+            print(f"   ⚠️ Créditos sin cama musical ({e})")
+            musica = None
     tarjeta = video_desde_paginas(paginas, carpeta / "tarjeta_creditos.mp4", ffmpeg=ffmpeg,
-                                  seg_por_pagina=float(cc.get("segundos_por_pagina", 3.0)))
+                                  seg_por_pagina=float(cc.get("segundos_por_pagina", 3.0)),
+                                  musica=musica, musica_volumen=float(cc.get("musica_volumen", 0.12)))
     (carpeta / "obras.json").write_text(json.dumps(obras, ensure_ascii=False, indent=1), "utf-8")
     for v in videos:
         v = Path(v)

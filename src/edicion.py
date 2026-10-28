@@ -13,6 +13,7 @@ Lee `config/edicion.yaml` y construye los filtros visuales y sonoros para:
 from __future__ import annotations
 
 import copy
+import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -254,6 +255,42 @@ def cargar_config_edicion() -> dict[str, Any]:
 # Overlays retirados del pool: muestran texto legible (p. ej. 27706 es código fuente C# de Unity) que
 # se lee sobre fondos oscuros al mezclarse en screen. Se excluyen aunque el archivo siga en la carpeta.
 OVERLAYS_BLOQUEADOS: frozenset[str] = frozenset({"glitch_pixabay_27706.mp4"})
+
+
+# Tramos utilizables de cada overlay (segundos). 36784 sale casi en blanco con arcos y recuadros
+# fantasma en 0.00-0.07 s y 13.77-15.0 s (Lente v3): sólo se usa 0.1-13.7 s, recortado y en bucle.
+OVERLAY_RANGOS_UTILES: dict[str, tuple[float, float]] = {"glitch_pixabay_36784.mp4": (0.1, 13.7)}
+
+
+def rango_util_overlay(nombre: str, ov_cfg: Optional[dict[str, Any]] = None) -> Optional[tuple[float, float]]:
+    """Tramo limpio (ini, fin) del overlay; la config textura_visual.video_overlay.rangos_utiles manda sobre el default."""
+    extra = {k.lower(): v for k, v in ((ov_cfg or {}).get("rangos_utiles") or {}).items()}
+    r = extra.get(nombre.lower()) or {k.lower(): v for k, v in OVERLAY_RANGOS_UTILES.items()}.get(nombre.lower())
+    if not r:
+        return None
+    ini, fin = float(r[0]), float(r[1])
+    if not 0 <= ini < fin:
+        raise ValueError(f"rango útil inválido para {nombre}: {r}")
+    return ini, fin
+
+
+def preparar_overlay_util(ruta: Path, ov_cfg: Optional[dict[str, Any]] = None, ffmpeg: str = "ffmpeg") -> Path:
+    """Devuelve un overlay que sólo contiene su tramo limpio (cacheado junto a assets/overlays/_recortes/).
+    El render lo usa con -stream_loop -1, así que en escenas largas se repite sólo el tramo limpio."""
+    rango = rango_util_overlay(ruta.name, ov_cfg)
+    if not rango:
+        return ruta
+    ini, fin = rango
+    carpeta = ruta.parent.parent / "_recortes"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    salida = carpeta / f"{ruta.stem}__{ini:.2f}-{fin:.2f}.mp4"
+    if salida.exists() and salida.stat().st_mtime >= ruta.stat().st_mtime and salida.stat().st_size > 1000:
+        return salida
+    tmp = salida.with_suffix(".tmp.mp4")
+    subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(ruta), "-ss", f"{ini:.3f}", "-to", f"{fin:.3f}", "-an",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(tmp)], check=True)
+    tmp.replace(salida)
+    return salida
 
 
 def listar_archivos_overlay(carpeta: Path, bloqueados: Optional[set[str]] = None) -> list[Path]:

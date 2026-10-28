@@ -178,3 +178,5 @@ creditos_finales:
   enabled: true
   obras_por_pagina: 9
   segundos_por_pagina: 9.0
+  musica: true            # cama musical bajita bajo la tarjeta (misma pista del video)
+  musica_volumen: 0.12
