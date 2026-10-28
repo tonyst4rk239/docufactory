@@ -120,3 +120,9 @@ def test_clips_citados_de_redes_uno_por_publicacion():
     assert [c["autor"] for c in clips] == ["TikTok @a", "X @b"]
     assert all(c["licencia"] == cf.LICENCIA_CLIP_CITADO for c in clips)
     assert cf.recolectar_obras(cred) == []
+
+
+def test_gfdl_tambien_pide_atribucion():
+    assert cf.requiere_atribucion("GFDL 1.2") and cf.requiere_atribucion("GNU Free Documentation License 1.2")
+    obras = cf.recolectar_obras([{"tomas": [{"licencia": "GFDL 1.2", "pagina": "https://commons.wikimedia.org/wiki/File:X.jpg", "autor": "Ralf Roletschek"}]}])
+    assert len(obras) == 1 and obras[0]["licencia"] == "GFDL 1.2"

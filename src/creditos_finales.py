@@ -18,11 +18,11 @@ from urllib.parse import unquote
 
 ANCHO, ALTO = 1920, 1080
 FPS = 30
-_RE_ATRIBUCION = re.compile(r"\bCC[\s-]*BY\b", re.IGNORECASE)
+_RE_ATRIBUCION = re.compile(r"\bCC[\s-]*BY\b|\bGFDL\b|GNU Free Documentation", re.IGNORECASE)
 
 
 def requiere_atribucion(licencia: str) -> bool:
-    """True para CC BY y CC BY-SA (cualquier versión); False para CC0, dominio público o stock libre."""
+    """True para CC BY, CC BY-SA y GFDL (piden autor y licencia); False para CC0, dominio público o stock libre."""
     lic = (licencia or "").strip()
     if not lic or re.search(r"\bCC0\b|dominio p[úu]blico|public domain|\bPD\b", lic, re.IGNORECASE):
         return False
@@ -146,7 +146,10 @@ def render_paginas(obras: list[dict], carpeta: Path, ruta_fuente: Optional[Path]
             l2, f2 = _ajustar(d, enlace_legible(o["enlace"]), ruta_fuente, 25, ancho_util, 16, recortar=False)
             d.text((margen, y + 42), l2, font=f2, fill=(140, 200, 255))
             y += paso
-        d.text((margen, ALTO - 58), "Licencias: creativecommons.org/licenses · Otras imágenes: dominio público, CC0, Pixabay y Pexels",
+        pie = "Licencias: creativecommons.org/licenses"
+        if any(re.search(r"GFDL|GNU Free", o["licencia"], re.IGNORECASE) for o in obras):
+            pie += " · gnu.org/licenses/fdl"
+        d.text((margen, ALTO - 58), pie + " · Otras imágenes: dominio público, CC0, Pixabay y Pexels",
                font=_fuente(ruta_fuente, 22), fill=(150, 150, 150))
         ruta = carpeta / f"creditos_{n:02d}.png"
         im.save(ruta)
