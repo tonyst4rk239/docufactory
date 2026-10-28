@@ -92,9 +92,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             cursor = t_w_fin
 
         # Agrupar de a `palabras_por_linea` (ej. bloques de 2-3 palabras) y resaltar palabra por palabra
-        for ini_bloque in range(0, len(palabras), palabras_por_linea):
-            bloque_pal = palabras[ini_bloque : ini_bloque + palabras_por_linea]
-            bloque_tiempos = tiempos_palabra[ini_bloque : ini_bloque + palabras_por_linea]
+        # Una negación ("no", "ni", "sin") nunca cierra una línea: se pasa a la siguiente para que
+        # "NO HAY PERITAJE" no se lea como "HAY PERITAJE" (afirmación) en pantalla.
+        bloques: list[tuple[int, int]] = []
+        ini_b = 0
+        while ini_b < len(palabras):
+            fin_b = min(ini_b + palabras_por_linea, len(palabras))
+            while fin_b - ini_b > 1 and fin_b < len(palabras) and _limpiar_token(palabras[fin_b - 1]) in {"NO", "NI", "SIN"}:
+                fin_b -= 1
+            bloques.append((ini_b, fin_b))
+            ini_b = fin_b
+        for ini_bloque, fin_bloque in bloques:
+            bloque_pal = palabras[ini_bloque:fin_bloque]
+            bloque_tiempos = tiempos_palabra[ini_bloque:fin_bloque]
 
             for idx_activo in range(len(bloque_pal)):
                 w_ini, w_fin = bloque_tiempos[idx_activo]
