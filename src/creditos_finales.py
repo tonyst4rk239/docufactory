@@ -65,6 +65,30 @@ def recolectar_obras(creditos: Iterable[dict]) -> list[dict]:
     return obras
 
 
+LICENCIA_CLIP_CITADO = "Fragmento citado con crédito (análisis y comentario)"
+
+
+def recolectar_clips_citados(creditos: Iterable[dict]) -> list[dict]:
+    """Clips reales de redes (tomas con fuente 'real'): uno por publicación, en orden de aparición."""
+    clips: list[dict] = []
+    vistas: set[str] = set()
+    for entrada in creditos or []:
+        for t in entrada.get("tomas") or []:
+            if t.get("fuente") != "real" or not t.get("url"):
+                continue
+            clave = t["url"].strip().rstrip("/").lower()
+            if clave in vistas:
+                continue
+            vistas.add(clave)
+            clips.append({
+                "titulo": "Video",
+                "autor": (t.get("credito") or "redes sociales").strip(),
+                "licencia": LICENCIA_CLIP_CITADO,
+                "enlace": t["url"].strip(),
+            })
+    return clips
+
+
 def paginar(obras: list[dict], por_pagina: int = 9) -> list[list[dict]]:
     por_pagina = max(1, int(por_pagina))
     return [obras[i:i + por_pagina] for i in range(0, len(obras), por_pagina)]
@@ -185,13 +209,19 @@ def anexar_creditos_finales(p, videos: list[Path], ffmpeg: str, cfg: Optional[di
     ruta_cred = p.ruta("b_roll", "creditos.json")
     if not ruta_cred.exists():
         return None
-    obras = recolectar_obras(json.loads(ruta_cred.read_text("utf-8")))
-    if not obras:
+    datos = json.loads(ruta_cred.read_text("utf-8"))
+    obras = recolectar_obras(datos)
+    clips = recolectar_clips_citados(datos)
+    if not obras and not clips:
         return None
     from . import config
     carpeta = p.carpeta / "renders" / "creditos_finales"
     por_pagina = int(cc.get("obras_por_pagina", 9))
-    paginas = render_paginas(obras, carpeta, ruta_fuente=config.FONTS_DIR / "bold.ttf", por_pagina=por_pagina)
+    fuente = config.FONTS_DIR / "bold.ttf"
+    paginas = render_paginas(clips, carpeta / "clips", ruta_fuente=fuente, por_pagina=por_pagina,
+                             titulo="CLIPS CITADOS · CRÉDITO A SUS AUTORES") if clips else []
+    if obras:
+        paginas += render_paginas(obras, carpeta, ruta_fuente=fuente, por_pagina=por_pagina)
     musica = None
     if cc.get("musica", True):
         try:
@@ -205,7 +235,7 @@ def anexar_creditos_finales(p, videos: list[Path], ffmpeg: str, cfg: Optional[di
     tarjeta = video_desde_paginas(paginas, carpeta / "tarjeta_creditos.mp4", ffmpeg=ffmpeg,
                                   seg_por_pagina=float(cc.get("segundos_por_pagina", 3.0)),
                                   musica=musica, musica_volumen=float(cc.get("musica_volumen", 0.12)))
-    (carpeta / "obras.json").write_text(json.dumps(obras, ensure_ascii=False, indent=1), "utf-8")
+    (carpeta / "obras.json").write_text(json.dumps(clips + obras, ensure_ascii=False, indent=1), "utf-8")
     for v in videos:
         v = Path(v)
         if not v.exists():
@@ -213,5 +243,6 @@ def anexar_creditos_finales(p, videos: list[Path], ffmpeg: str, cfg: Optional[di
         tmp = v.with_name(v.stem + "_con_creditos" + v.suffix)
         anexar(v, tarjeta, tmp, ffmpeg=ffmpeg)
         tmp.replace(v)
-    print(f"🎞️  Tarjeta final de créditos: {len(obras)} obras CC BY/BY-SA en {len(paginas)} páginas ({tarjeta})")
+    print(f"🎞️  Tarjeta final de créditos: {len(clips)} clips citados + {len(obras)} obras CC BY/BY-SA "
+          f"en {len(paginas)} páginas ({tarjeta})")
     return tarjeta

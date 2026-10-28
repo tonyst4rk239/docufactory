@@ -103,3 +103,20 @@ def test_tarjeta_con_cama_musical_bajita(tmp_path):
     medio = _rms_db(con, ss=2.0, t=0.5)      # la pista dura 1 s: sólo suena aquí si va en bucle
     assert -50 < medio < -25                 # suena, y bajita (0.12 = -18 dB sobre la pista)
     assert abs(_dur(con) - 4.0) < 0.2
+
+
+def test_clips_citados_de_redes_uno_por_publicacion():
+    cred = [
+        {"escena": 1, "tomas": [
+            {"fuente": "real", "url": "https://www.tiktok.com/@a/video/1", "credito": "TikTok @a"},
+            {"fuente": "stock", "url": "https://cdn.pixabay.com/x.mp4"},
+        ]},
+        {"escena": 2, "tomas": [
+            {"fuente": "real", "url": "https://www.tiktok.com/@a/video/1/", "credito": "TikTok @a"},
+            {"fuente": "real", "url": "https://x.com/b/status/2", "credito": "X @b"},
+        ]},
+    ]
+    clips = cf.recolectar_clips_citados(cred)
+    assert [c["autor"] for c in clips] == ["TikTok @a", "X @b"]
+    assert all(c["licencia"] == cf.LICENCIA_CLIP_CITADO for c in clips)
+    assert cf.recolectar_obras(cred) == []
