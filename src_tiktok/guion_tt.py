@@ -26,7 +26,7 @@ from src.host_anim import es_mood_oscuro_sin_dinero, normalizar_pose
 
 
 def _extraer_keyword_automatica(voz: str) -> str:
-    limpio = re.sub(r"<[^>]+>", " ", voz or "")
+    limpio = re.sub(r"<[^>]+>|\[[^\[\]\n]{1,40}\]", " ", voz or "")
     palabras = re.findall(r"[a-zA-ZáéíóúñÁÉÍÓÚÑ]{4,}", limpio)
     if not palabras:
         return "SECRETO"

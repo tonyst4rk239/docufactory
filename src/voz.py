@@ -25,10 +25,23 @@ from .guion import cargar_guion, Guion, Escena
 VOZ_DEFAULT = "es-US-AlonsoNeural"
 
 
-def limpiar_tags_ssml(texto: str) -> str:
-    """Elimina etiquetas SSML (<break .../>, <emphasis>, etc.) dejando el texto limpio."""
-    t = re.sub(r"<[^>]+>", " ", texto or "")
+# Etiquetas de actuación en línea que Pluma puede poner en `voz` (ej. "[susurro]", "[pausa corta]").
+# Nunca se pronuncian ni salen en subtítulos: los motores que no las entienden las quitan.
+RE_TAG_ACTUACION = re.compile(r"\[\s*[^\[\]\n]{1,40}?\s*\]")
+RE_TAG_PAUSA = re.compile(r"\[\s*pausa(?:\s+corta)?\s*\]", re.IGNORECASE)
+
+
+def quitar_tags_actuacion(texto: str) -> str:
+    """Quita las etiquetas de actuación entre corchetes ([susurro], [pausa corta], ...)."""
+    t = RE_TAG_ACTUACION.sub(" ", texto or "")
+    t = re.sub(r"\s+([,.;:!?…])", r"\1", t)
     return re.sub(r"\s+", " ", t).strip()
+
+
+def limpiar_tags_ssml(texto: str) -> str:
+    """Elimina etiquetas SSML (<break .../>, <emphasis>, etc.) y de actuación ([susurro]) dejando el texto limpio."""
+    t = re.sub(r"<[^>]+>", " ", texto or "")
+    return quitar_tags_actuacion(t)
 
 
 def _reemplazar_break_ssml(match: re.Match) -> str:
@@ -51,11 +64,15 @@ def preparar_texto_con_pausas(texto: str) -> str:
     """Prepara el texto convirtiendo etiquetas SSML <break/> e inyectando pausas de ritmo documental."""
     t = re.sub(r"<\s*(?:break|pause)\b([^>]*)/?\s*>", _reemplazar_break_ssml, texto or "", flags=re.IGNORECASE)
     t = re.sub(r"<[^>]+>", " ", t)
+    # Etiquetas de actuación: "[pausa corta]" se vuelve respiro; las demás ("[susurro]") se quitan
+    t = RE_TAG_PAUSA.sub("... ", t)
+    t = quitar_tags_actuacion(t)
     # Asegurar espacios limpios tras signos de puntuación
     t = re.sub(r"\s+", " ", t).strip()
     # Puntos suspensivos para dar respiro reflexivo en puntos seguidos
     t = t.replace(". ", "... ")
     t = re.sub(r"(?:\.\.\.\s*){2,}", "... ", t)
+    t = re.sub(r"(?:…|\.){2,}", "...", t)
     t = t.replace(", ", ", ")
     return t
 

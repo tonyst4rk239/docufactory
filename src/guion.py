@@ -628,7 +628,7 @@ def estructurar(material: str, minutos: float, tema: str = "") -> Guion:
 
 # ------------------------------------------------------------------ salida
 def _contar_palabras_habladas(texto: str) -> int:
-    limpio = re.sub(r"<[^>]+>", " ", texto or "")
+    limpio = re.sub(r"<[^>]+>|\[[^\[\]\n]{1,40}\]", " ", texto or "")
     return len([w for w in limpio.split() if w.strip()])
 
 
