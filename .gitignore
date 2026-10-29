@@ -36,3 +36,6 @@ cookies.txt
 
 # Reportes generados por scripts/metricas_semanales.py
 reportes/
+
+# Capturas de fallos de los uploaders con Playwright
+logs/

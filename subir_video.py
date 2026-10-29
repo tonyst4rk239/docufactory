@@ -1,10 +1,14 @@
 """Docu Factory — CLI Unificado de Subida Multi-Plataforma.
-Sube automáticamente cualquier video a YouTube Shorts, Facebook Reels y TikTok.
+Sube automáticamente cualquier video a YouTube Shorts, Facebook Reels (Página y perfil) y TikTok.
+
+Plataformas: yt (YouTube), fb (Página "Código oculto TV", Graph API),
+             fbperfil (perfil personal "Codigo Ocultotv", Playwright), tt/tiktok.
 
 Uso:
-  python subir_video.py <video.mp4> [--plataformas yt fb tt] [--titulo "Mi Titulo"] [--texto "Descripcion #shorts"]
+  python subir_video.py <video.mp4> [--plataformas fb,fbperfil,tiktok,yt] [--titulo "Mi Titulo"] [--texto "Descripcion #shorts"]
   python subir_video.py status
   python subir_video.py login-tiktok
+  python subir_video.py login-fbperfil
   python subir_video.py auth-youtube
 """
 from __future__ import annotations
@@ -21,6 +25,9 @@ load_dotenv()
 from src.uploader.youtube_uploader import subir_youtube_short, CLIENT_SECRETS_FILE, TOKEN_FILE, obtener_servicio_youtube
 from src.uploader.facebook_uploader import subir_facebook_reel
 from src.uploader.tiktok_uploader import subir_tiktok, iniciar_sesion_tiktok, TIKTOK_USER_DATA_DIR
+from src.uploader.facebook_perfil_uploader import (
+    subir_reel_perfil, iniciar_sesion_fb_perfil, sesion_fb_perfil_existe, FbPerfilBloqueado,
+)
 
 
 def cmd_status(args) -> int:
@@ -53,7 +60,18 @@ def cmd_status(args) -> int:
     else:
         print("❌ TikTok Playwright: Sin sesión iniciada. Ejecuta 'python subir_video.py login-tiktok'")
 
+    # 4. Facebook perfil personal
+    if sesion_fb_perfil_existe():
+        print("✅ Facebook perfil (Playwright): SESIÓN GUARDADA (fb_perfil_browser_profile)")
+    else:
+        print("❌ Facebook perfil (Playwright): Sin sesión. Ejecuta 'python subir_video.py login-fbperfil'")
+
     print("=" * 65 + "\n")
+    return 0
+
+
+def cmd_login_fbperfil(args) -> int:
+    iniciar_sesion_fb_perfil()
     return 0
 
 
@@ -84,7 +102,7 @@ def cmd_subir(args) -> int:
     if getattr(args, "texto_archivo", None):
         args.texto = Path(args.texto_archivo).read_text(encoding="utf-8")
     texto = args.texto or (titulo + " #fyp #parati #viral #codigoocultotv #Shorts")
-    plataformas = [p.lower() for p in args.plataformas]
+    plataformas = [p.strip().lower() for grupo in args.plataformas for p in grupo.split(",") if p.strip()]
 
     print("\n" + "=" * 65)
     print(f"🚀 PUBLICANDO VIDEO MULTI-PLATAFORMA")
@@ -115,6 +133,19 @@ def cmd_subir(args) -> int:
         except Exception as e:
             print(f"❌ Error subiendo a Facebook Reels: {e}")
             errores.append("Facebook")
+
+    # 2b. Facebook perfil personal (Playwright)
+    if "fbperfil" in plataformas:
+        try:
+            res = subir_reel_perfil(video_path, descripcion=texto, headless=args.headless,
+                                    publicar=not args.prueba_fbperfil)
+            print(f"FBPERFIL_RESULT status={res['status']} url={res['url']}")
+        except FbPerfilBloqueado as e:
+            print(f"⛔ Facebook perfil bloqueado (checkpoint/login/2FA): {e}")
+            errores.append("Facebook perfil")
+        except Exception as e:
+            print(f"❌ Error subiendo al perfil de Facebook: {e}")
+            errores.append("Facebook perfil")
 
     # 3. TikTok
     if "tt" in plataformas or "tiktok" in plataformas:
@@ -148,10 +179,13 @@ def main():
     p_lt = subs.add_parser("login-tiktok", help="Inicia sesión en TikTok y guarda sesión")
     p_lt.set_defaults(func=cmd_login_tiktok)
 
+    p_lf = subs.add_parser("login-fbperfil", help="Inicia sesión en el perfil personal de Facebook")
+    p_lf.set_defaults(func=cmd_login_fbperfil)
+
     # Subcomando subir
     p_sub = subs.add_parser("subir", help="Sube un video a las plataformas seleccionadas")
     p_sub.add_argument("video", help="Ruta al archivo MP4")
-    p_sub.add_argument("--plataformas", nargs="+", default=["yt", "fb", "tt"], help="Plataformas destino: yt, fb, tt")
+    p_sub.add_argument("--plataformas", nargs="+", default=["yt", "fb", "tt"], help="Plataformas destino: yt, fb, fbperfil, tt (con espacios o comas: fb,fbperfil,tiktok,yt)")
     p_sub.add_argument("--titulo", default=None, help="Título del video")
     p_sub.add_argument("--texto", default=None, help="Texto/Copy y hashtags")
     p_sub.add_argument("--privacidad", default="public", choices=["public", "private", "unlisted"], help="Privacidad (YouTube)")
@@ -159,6 +193,8 @@ def main():
     p_sub.add_argument("--miniatura", default=None, help="Ruta a miniatura personalizada (YouTube)")
     p_sub.add_argument("--tags", default=None, help="Tags separados por coma (YouTube)")
     p_sub.add_argument("--texto-archivo", dest="texto_archivo", default=None, help="Leer descripción desde archivo")
+    p_sub.add_argument("--prueba-fbperfil", dest="prueba_fbperfil", action="store_true",
+                       help="fbperfil: llega a la pantalla final sin pulsar Publicar")
     p_sub.add_argument("--headless", action="store_true", help="Ejecutar TikTok en segundo plano sin ventana visual")
     p_sub.set_defaults(func=cmd_subir)
 
