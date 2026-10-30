@@ -39,3 +39,8 @@ reportes/
 
 # Capturas de fallos de los uploaders con Playwright
 logs/
+
+# Base de datos SQLite local de analíticas
+datos/*.db
+datos/*.sqlite
+datos/docufactory.db

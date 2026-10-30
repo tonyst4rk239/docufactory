@@ -18,6 +18,7 @@ formatos:
     transiciones_xfade: true
     top_rank_fx: true
     audio_ducking_sidechain: true
+    normalizar_brillo: true
 
   vertical_9_16:
     fps: 30
@@ -31,6 +32,15 @@ formatos:
     zoom_punch: true
     subtitulos_karaoke: true
     audio_ducking_sidechain: true
+    normalizar_brillo: true
+
+normalizacion_brillo:
+  enabled: true
+  umbral_salto: 40.0         # Si el salto entre escenas consecutivas > 40 (0-255)
+  target_luminancia: 120.0   # Media objetivo para la toma brillante (~115-125)
+  rango_target: [115.0, 125.0]
+  umbral_oscuro: 45.0       # Si la toma oscura (post-grado) queda por debajo, se aclara
+  target_oscuro: 70.0        # Media objetivo al aclarar una toma casi negra
 
 color_grading:
   enabled: true

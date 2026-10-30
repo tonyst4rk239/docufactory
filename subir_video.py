@@ -30,6 +30,52 @@ from src.uploader.facebook_perfil_uploader import (
 )
 
 
+def _deducir_slug(video_path: Path) -> str:
+    """Extrae el slug del proyecto desde la ruta del video."""
+    parts = video_path.resolve().parts
+    if "proyectos" in parts:
+        idx = parts.index("proyectos")
+        if idx + 1 < len(parts):
+            return parts[idx + 1].replace("video_", "")
+    return video_path.stem.replace("_con_voz_ia", "").replace("_sin_voz", "")
+
+TIKTOK_PERFIL_URL = os.environ.get("TIKTOK_PERFIL_URL", "https://www.tiktok.com/@codiigoocultottv")
+
+
+def _registrar_publicacion(video_path: Path, plataforma: str, url, estado, platform_id, texto, titulo) -> None:
+    """Registra la subida en datos/docufactory.db. Nunca lanza: un fallo aquí no afecta la subida."""
+    try:
+        from datos.db import guardar_publicacion, obtener_conexion
+        from datos.registrar import _ahora_merida_iso
+        slug = _deducir_slug(video_path)
+        # Si el video aún no está en la base, intenta registrarlo completo desde su proyecto
+        try:
+            con = obtener_conexion()
+            existe = con.execute("SELECT 1 FROM videos WHERE id = ?", (slug,)).fetchone()
+            con.close()
+            if not existe:
+                carpeta = Path(__file__).resolve().parent / "proyectos" / f"video_{slug}"
+                if (carpeta / "proyecto.json").exists():
+                    from src.estado import Proyecto
+                    from datos.registrar import registrar_proyecto_completo
+                    registrar_proyecto_completo(Proyecto(carpeta))
+        except Exception as e:
+            print(f"⚠️ Aviso: no se pudo registrar el video {slug} antes de la publicación ({e})")
+        guardar_publicacion({
+            "video_id": slug,
+            "plataforma": plataforma,
+            "url": url,
+            "fecha_hora_publicacion": _ahora_merida_iso(),
+            "estado": estado,
+            "video_platform_id": platform_id,
+            "descripcion": texto,
+            "video_min": {"titulo": titulo, "descripcion": texto},
+        })
+    except Exception as e:
+        print(f"⚠️ Aviso: No se pudo registrar publicación en SQLite ({e})")
+
+
+
 def cmd_status(args) -> int:
     print("\n" + "=" * 65)
     print("📊 ESTADO DE CONEXIÓN MULTI-PLATAFORMA")
@@ -122,6 +168,7 @@ def cmd_subir(args) -> int:
                 privacidad=args.privacidad, es_short=not args.largo, miniatura=args.miniatura,
             )
             print(f"YT_RESULT video_id={res['video_id']} url={res['url']} privacidad={res['privacidad']} miniatura_ok={res['miniatura_ok']}")
+            _registrar_publicacion(video_path, "youtube", res.get("url"), args.privacidad, res.get("video_id"), texto, titulo)
         except Exception as e:
             print(f"❌ Error subiendo a YouTube: {e}")
             errores.append("YouTube")
@@ -129,7 +176,8 @@ def cmd_subir(args) -> int:
     # 2. Facebook Reels
     if "fb" in plataformas or "facebook" in plataformas:
         try:
-            subir_facebook_reel(video_path, descripcion=texto)
+            res_fb = subir_facebook_reel(video_path, descripcion=texto)
+            _registrar_publicacion(video_path, "fb_pagina", (res_fb or {}).get("url"), "publico", (res_fb or {}).get("video_id"), texto, titulo)
         except Exception as e:
             print(f"❌ Error subiendo a Facebook Reels: {e}")
             errores.append("Facebook")
@@ -140,6 +188,8 @@ def cmd_subir(args) -> int:
             res = subir_reel_perfil(video_path, descripcion=texto, headless=args.headless,
                                     publicar=not args.prueba_fbperfil)
             print(f"FBPERFIL_RESULT status={res['status']} url={res['url']}")
+            if res.get("status") in ("Completado", "YaPublicado"):
+                _registrar_publicacion(video_path, "fb_perfil", res.get("url"), "publico", res.get("reel_id"), texto, titulo)
         except FbPerfilBloqueado as e:
             print(f"⛔ Facebook perfil bloqueado (checkpoint/login/2FA): {e}")
             errores.append("Facebook perfil")
@@ -150,7 +200,8 @@ def cmd_subir(args) -> int:
     # 3. TikTok
     if "tt" in plataformas or "tiktok" in plataformas:
         try:
-            subir_tiktok(video_path, caption=texto, headless=args.headless)
+            res_tt = subir_tiktok(video_path, caption=texto, headless=args.headless)
+            _registrar_publicacion(video_path, "tiktok", (res_tt or {}).get("url") or TIKTOK_PERFIL_URL, "publico", None, texto, titulo)
         except Exception as e:
             print(f"❌ Error subiendo a TikTok: {e}")
             errores.append("TikTok")
