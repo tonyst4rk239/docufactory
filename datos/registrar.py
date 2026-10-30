@@ -67,6 +67,136 @@ def _obtener_duracion_archivo(ruta: Path) -> float:
         return 0.0
 
 
+def _ahora_merida_iso(ts: Optional[float] = None) -> str:
+    """Fecha ISO en hora de Mérida (America/Merida). En Windows sin tzdata cae a UTC-6 fijo."""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("America/Merida")
+    except Exception:
+        from datetime import timedelta
+        tz = timezone(timedelta(hours=-6), "UTC-6")
+    dt = datetime.fromtimestamp(ts, tz) if ts is not None else datetime.now(tz)
+    return dt.isoformat(timespec="seconds")
+
+
+def _clasificar_fuente(*textos: Any) -> Optional[str]:
+    """Normaliza la fuente de una toma a commons/pixabay/pexels/ia/real/otro a partir de url, crédito o fuente."""
+    t = " ".join(str(x) for x in textos if x).lower()
+    if not t.strip():
+        return None
+    if "wikimedia" in t or "commons" in t:
+        return "commons"
+    if "pixabay" in t:
+        return "pixabay"
+    if "pexels" in t:
+        return "pexels"
+    if re.search(r"\b(ia|ai|gemini|imagen generada|generad[ao] con ia|flux|midjourney|dall)\b", t):
+        return "ia"
+    if re.search(r"\b(real|tiktok\.com|x\.com|twitter|youtube\.com|youtu\.be|facebook\.com|instagram)\b", t):
+        return "real"
+    return "otro"
+
+
+_RE_LICENCIA = re.compile(r"\b(CC0|CC[ -]BY(?:[ -](?:SA|NC|ND))*(?:[ -]\d\.\d)?|Dominio p[uú]blico(?: \([^)]*\))?|PD(?:-[A-Za-z]+)?|Pixabay Content License|Pexels License)", re.IGNORECASE)
+
+
+def _licencia_de(info: dict) -> Optional[str]:
+    lic = info.get("licencia")
+    if lic:
+        return str(lic)
+    m = _RE_LICENCIA.search(str(info.get("credito") or ""))
+    if m:
+        return m.group(1)
+    fuente = _clasificar_fuente(info.get("url"), info.get("pagina"), info.get("fuente"), info.get("credito"))
+    if fuente == "pixabay":
+        return "Pixabay Content License"
+    if fuente == "pexels":
+        return "Pexels License"
+    return None
+
+
+def _autor_de(info: dict) -> Optional[str]:
+    if info.get("autor"):
+        return str(info["autor"])
+    cred = str(info.get("credito") or "")
+    if not cred:
+        return None
+    # "Autor / Wikimedia Commons (CC BY 3.0)" o "Archivo.jpg · Autor · CC BY-SA 4.0"
+    if " · " in cred:
+        partes = [x.strip() for x in cred.split(" · ")]
+        if len(partes) >= 2:
+            return partes[1]
+    m = re.match(r"\s*([^/(;]+?)\s*/", cred)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _modo_desde_texto(v: Any) -> Optional[str]:
+    t = str(v or "").lower()
+    if not t:
+        return None
+    if "fit" in t or "desenfoc" in t or "centrad" in t or "panel" in t:
+        return "fit"
+    if "fill" in t or "pantalla completa" in t or "recorte" in t or "crop" in t:
+        return "fill"
+    return None
+
+
+def _detectar_modo_encuadre(ruta: Path) -> Optional[str]:
+    """Detecta fit (imagen centrada sobre fondo desenfocado) vs fill (llena el cuadro) en un clip vertical.
+
+    Compara la energía de bordes (edgedetect) de las franjas superior e inferior contra el centro: en modo fit
+    ambas franjas son fondo desenfocado (casi sin bordes)."""
+    if not ruta or not Path(ruta).exists():
+        return None
+    import subprocess
+    try:
+        ffmpeg_bin = config.ffmpeg_bin("ffmpeg") or "ffmpeg"
+    except Exception:
+        ffmpeg_bin = "ffmpeg"
+
+    def _energia(crop: str) -> Optional[float]:
+        cmd = [ffmpeg_bin, "-hide_banner", "-v", "info", "-ss", "0.5", "-i", str(ruta), "-frames:v", "3",
+               "-vf", f"{crop},edgedetect=low=0.08:high=0.2,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+               "-f", "null", "-"]
+        try:
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+            vals = [float(x) for x in re.findall(r"YAVG=(\d+(?:\.\d+)?)", (r.stdout or "") + (r.stderr or ""))]
+            return sum(vals) / len(vals) if vals else None
+        except Exception:
+            return None
+
+    arriba = _energia("crop=iw:ih*0.12:0:ih*0.02")
+    abajo = _energia("crop=iw:ih*0.12:0:ih*0.86")
+    centro = _energia("crop=iw:ih*0.2:0:ih*0.4")
+    if arriba is None or abajo is None or centro is None or centro < 0.5:
+        return None
+    # fit: franjas superior E inferior son fondo desenfocado (sin bordes)
+    umbral = max(0.1, centro * 0.05)
+    return "fit" if (arriba < umbral and abajo < umbral) else "fill"
+
+
+def _leer_textos_publicacion(p: Proyecto) -> tuple[Optional[str], Optional[str]]:
+    """Descripción/caption y hashtags desde publicacion/ (caption*.txt, descripcion*.txt, paquete_youtube.txt)."""
+    carpeta = p.carpeta / "publicacion"
+    if not carpeta.exists():
+        return None, None
+    orden = ["caption.txt", "descripcion.txt", "descripcion_youtube.txt", "paquete_youtube.txt"]
+    cands = [carpeta / n for n in orden] + sorted(carpeta.glob("caption*.txt")) + sorted(carpeta.glob("descripcion*.txt"))
+    for c in cands:
+        if c.exists() and c.stat().st_size > 0:
+            try:
+                txt = c.read_text(encoding="utf-8").strip()
+            except Exception:
+                continue
+            if not txt:
+                continue
+            tags = list(dict.fromkeys(re.findall(r"#[\wáéíóúñÁÉÍÓÚÑ]+", txt)))
+            return txt, (" ".join(tags) if tags else None)
+    return None, None
+
+
 def _limpiar_ssml(texto: str) -> str:
     """Elimina etiquetas SSML o corchetes de dirección vocal."""
     t = re.sub(r"<[^>]+>", " ", texto or "")
@@ -146,9 +276,12 @@ def registrar_proyecto_completo(
         yt_meta = datos_guion_raw.get("metadatos_youtube") or datos_guion_raw.get("youtube") or {}
         titulos_cands = yt_meta.get("titulos") or [datos_guion_raw.get("titulo") or tema]
         titulo_principal = titulos_cands[0] if titulos_cands else tema
-        descripcion = yt_meta.get("descripcion") or ""
+        descripcion = yt_meta.get("descripcion") or None
         tags_raw = yt_meta.get("tags") or []
-        hashtags = " ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw)
+        hashtags = (" ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw)) or None
+        desc_pub, tags_pub = _leer_textos_publicacion(p)
+        descripcion = descripcion or desc_pub
+        hashtags = hashtags or tags_pub
 
         # Miniatura
         mini_meta = datos_guion_raw.get("miniatura") or {}
@@ -159,18 +292,32 @@ def registrar_proyecto_completo(
                 mini_meta = {**mini_meta, **pub_mini}
             except Exception:
                 pass
-        texto_mini = mini_meta.get("titulo_miniatura") or mini_meta.get("texto") or mini_meta.get("titulo") or ""
+        texto_mini = mini_meta.get("titulo_miniatura") or mini_meta.get("texto") or mini_meta.get("titulo") or None
 
         # Voz usada
-        voz_usada = p.datos.get("voz_usada") or ("gemini:Charon" if es_tiktok else "es-US-AlonsoNeural")
-        es_fallback_voz = 1 if ("RESPALDO" in str(voz_usada).upper() or "fallback" in str(voz_usada).lower()) else 0
+        voz_reel = p.datos.get("voz_reel") or {}
+        voz_usada = p.datos.get("voz_usada") or (f"{voz_reel['motor']}:{voz_reel['voz']}" if voz_reel.get("motor") and voz_reel.get("voz") else None)
+        if not voz_usada:
+            vu = p.ruta("voz", "VOZ_USADA.txt")
+            if vu.exists():
+                try:
+                    voz_usada = vu.read_text(encoding="utf-8").strip().splitlines()[0][:80] or None
+                except Exception:
+                    voz_usada = None
+        es_fallback_voz = 1 if (voz_reel.get("motivo_respaldo") or "RESPALDO" in str(voz_usada or "").upper() or "fallback" in str(voz_usada or "").lower()) else 0
 
         # Costos y render
-        costo_voz = float(p.datos.get("costo_voz_usd") or 0.0)
-        costo_ia = float(p.datos.get("costo_ia_usd") or 0.0)
-        t_render = float(tiempo_render_s or p.datos.get("tiempo_render_s") or 0.0)
+        def _num(v: Any) -> Optional[float]:
+            try:
+                return float(v) if v is not None and v != "" else None
+            except (TypeError, ValueError):
+                return None
+
+        costo_voz = _num(p.datos.get("costo_voz_usd"))
+        costo_ia = _num(p.datos.get("costo_ia_usd"))
+        t_render = _num(tiempo_render_s if tiempo_render_s is not None else p.datos.get("tiempo_render_s"))
         fecha_render = (
-            datetime.fromtimestamp(video_final.stat().st_mtime, timezone.utc).isoformat()
+            _ahora_merida_iso(video_final.stat().st_mtime)
             if video_final
             else p.datos.get("creado")
         )
@@ -192,12 +339,12 @@ def registrar_proyecto_completo(
             "descripcion": descripcion,
             "hashtags": hashtags,
             "texto_miniatura": texto_mini,
-            "fuente_tema": p.datos.get("fuente_tema", "otro"),
-            "tendencia_origen": p.datos.get("tendencia_origen", ""),
-            "fecha_especial": p.datos.get("fecha_especial", ""),
+            "fuente_tema": p.datos.get("fuente_tema"),
+            "tendencia_origen": p.datos.get("tendencia_origen"),
+            "fecha_especial": p.datos.get("fecha_especial"),
             "costo_voz_usd": costo_voz,
             "costo_ia_usd": costo_ia,
-            "tiempo_render_s": round(t_render, 2),
+            "tiempo_render_s": round(t_render, 2) if t_render is not None else None,
         })
 
         # -------------------------------------------------------------------
@@ -243,6 +390,20 @@ def registrar_proyecto_completo(
         # -------------------------------------------------------------------
         # 4. INSERTAR EN TABLA ESCENAS
         # -------------------------------------------------------------------
+        # El avatar sólo aparece si el guion lo usa (usar_avatar) y el proyecto no es sin_host
+        usar_avatar = bool(datos_guion_raw.get("usar_avatar", True)) and not p.datos.get("sin_host", False)
+
+        # Créditos reales por escena (fuente, autor, licencia)
+        creditos_por_escena: dict[int, dict] = {}
+        cred_path = p.ruta("b_roll", "creditos.json")
+        if cred_path.exists():
+            try:
+                for c_item in json.loads(cred_path.read_text(encoding="utf-8")) or []:
+                    if isinstance(c_item, dict) and c_item.get("escena") is not None:
+                        creditos_por_escena[int(c_item["escena"])] = c_item
+            except Exception:
+                pass
+
         lista_escenas_db = []
         t_acum = 0.0
         total_esc = len(escenas_raw)
@@ -284,7 +445,7 @@ def registrar_proyecto_completo(
             })
 
             # Host visible
-            host_vis = bool(esc.get("host_visible", True)) and not p.datos.get("sin_host", False)
+            host_vis = usar_avatar and bool(esc.get("host_visible", True))
             if host_vis:
                 host_vis_segundos.append(round(t_ini + d_esc / 2.0, 1))
 
@@ -303,7 +464,8 @@ def registrar_proyecto_completo(
             t_fin_esc = t_ini_esc + d_esc
             t_acum = t_fin_esc
 
-            host_vis = bool(esc.get("host_visible", True)) and not p.datos.get("sin_host", False)
+            host_vis = usar_avatar and bool(esc.get("host_visible", True))
+            cred_esc = creditos_por_escena.get(eid, {})
 
             # Manifiesto de cortes detallados de tomas.py si existe
             man_path = p.ruta("b_roll", f"escena_{eid:03d}_tomas.json")
@@ -317,10 +479,12 @@ def registrar_proyecto_completo(
                         info_t = tomas_info[j] if j < len(tomas_info) else {}
                         arch_t = info_t.get("archivo") or f"escena_{eid:03d}.mp4"
                         ruta_arch = p.ruta("b_roll", arch_t)
-                        sha = calcular_sha1(ruta_arch)
-                        brillo = medir_luminancia_media(ruta_arch) or 0.0
-                        fuente_t = info_t.get("fuente") or ("real" if "real" in arch_t else "pixabay")
-                        modo_t = "panel_evidencia" if fuente_t == "real" else "ken_burns"
+                        sha = calcular_sha1(ruta_arch) if ruta_arch.exists() else None
+                        brillo = medir_luminancia_media(ruta_arch) if ruta_arch.exists() else None
+                        fuente_t = _clasificar_fuente(info_t.get("pagina"), info_t.get("url"), info_t.get("credito"),
+                                                      info_t.get("fuente")) or _clasificar_fuente(cred_esc.get("url"), cred_esc.get("credito"))
+                        modo_t = _modo_desde_texto(info_t.get("encuadre") or info_t.get("modo")) or _detectar_modo_encuadre(ruta_arch)
+                        mov = info_t.get("movimiento")
 
                         lista_tomas_db.append({
                             "n_escena": eid,
@@ -329,17 +493,18 @@ def registrar_proyecto_completo(
                             "archivo": arch_t,
                             "sha1": sha,
                             "fuente": fuente_t,
-                            "autor": info_t.get("autor", ""),
-                            "licencia": info_t.get("licencia", "libre"),
+                            "autor": _autor_de(info_t),
+                            "licencia": _licencia_de(info_t),
                             "modo": modo_t,
-                            "brillo_medio": round(brillo, 1),
-                            "movimiento": "zoom_lento" if modo_t == "ken_burns" else "estatico",
+                            "brillo_medio": round(brillo, 1) if brillo is not None else None,
+                            "movimiento": mov or None,
                             "aparece_host": 1 if host_vis else 0,
                         })
                         offset_toma += dur_t
-                    continue
-                except Exception:
-                    pass
+                    if segs:
+                        continue
+                except Exception as e:
+                    print(f"⚠️ Aviso: manifiesto de tomas ilegible {man_path.name} ({e})")
 
             # Si no hay manifiesto de tomas múltiples, tomar el clip principal de la escena
             arch_esc = f"escena_{eid:03d}.mp4"
@@ -347,8 +512,8 @@ def registrar_proyecto_completo(
             if not ruta_clip.exists():
                 ruta_clip = p.ruta("b_roll", f"escena_{eid:03d}.jpg")
                 arch_esc = ruta_clip.name if ruta_clip.exists() else arch_esc
-            sha = calcular_sha1(ruta_clip)
-            brillo = medir_luminancia_media(ruta_clip) or 0.0
+            sha = calcular_sha1(ruta_clip) if ruta_clip.exists() else None
+            brillo = medir_luminancia_media(ruta_clip) if ruta_clip.exists() else None
 
             lista_tomas_db.append({
                 "n_escena": eid,
@@ -356,11 +521,11 @@ def registrar_proyecto_completo(
                 "fin_s": round(t_fin_esc, 3),
                 "archivo": arch_esc,
                 "sha1": sha,
-                "fuente": "stock",
-                "autor": "",
-                "licencia": "libre",
-                "modo": "fill" if not es_tiktok else "zoom_punch",
-                "brillo_medio": round(brillo, 1),
+                "fuente": _clasificar_fuente(cred_esc.get("url"), cred_esc.get("credito"), cred_esc.get("fuente")),
+                "autor": _autor_de(cred_esc),
+                "licencia": _licencia_de(cred_esc),
+                "modo": _modo_desde_texto(cred_esc.get("encuadre") or cred_esc.get("modo")) or _detectar_modo_encuadre(ruta_clip),
+                "brillo_medio": round(brillo, 1) if brillo is not None else None,
                 "movimiento": "zoom_punch" if es_tiktok else "zoom_lento",
                 "aparece_host": 1 if host_vis else 0,
             })
@@ -389,43 +554,50 @@ def registrar_proyecto_completo(
         if not ruta_master_aud.exists() and video_final:
             ruta_master_aud = video_final
 
-        lufs_medido = medir_lufs(ruta_master_aud) or -16.0
-        musica_nombre = datos_guion_raw.get("mood") or "misterio"
+        # LUFS del video final (lo que escucha la audiencia); si no hay, del máster de voz
+        lufs_medido = medir_lufs(video_final) if video_final else None
+        if lufs_medido is None:
+            lufs_medido = medir_lufs(ruta_master_aud)
+        musica_nombre = datos_guion_raw.get("mood") or None
 
         # Conteo de pausas narrativas SSML
         todas_voces_raw = " ".join(esc.get("voz", "") for esc in escenas_raw)
         pausas_tags = re.findall(r"<break\s+time=['\"]?(\d+)m?s?['\"]?", todas_voces_raw)
         n_pausas = len(pausas_tags)
-        media_pausa_s = (sum(float(p) / 1000.0 for p in pausas_tags) / max(1, n_pausas)) if n_pausas else 0.35
+        # Pausas: <break time="..ms"> o etiquetas [pausa corta]/[pausa larga] del guion
+        n_pausas += len(re.findall(r"\[pausa[^\]]*\]", todas_voces_raw, re.IGNORECASE))
+        media_pausa_s = (sum(float(x) / 1000.0 for x in pausas_tags) / len(pausas_tags)) if pausas_tags else None
 
         sfx_usados = list({esc.get("sfx") for esc in escenas_raw if esc.get("sfx") and esc.get("sfx") != "ninguno"})
 
         guardar_audio({
             "video_id": slug,
-            "lufs": round(lufs_medido, 1),
+            "lufs": round(lufs_medido, 1) if lufs_medido is not None else None,
             "musica": musica_nombre,
             "efectos": sfx_usados,
             "n_pausas": n_pausas,
-            "pausa_media_s": round(media_pausa_s, 2),
+            "pausa_media_s": round(media_pausa_s, 2) if media_pausa_s is not None else None,
         })
 
         # -------------------------------------------------------------------
         # 8. INSERTAR EN TABLA MINIATURA
         # -------------------------------------------------------------------
-        arch_mini = "publicacion/miniatura_1080p.jpg"
-        tiene_cara = 1 if (mini_meta.get("host") or mini_meta.get("avatar") or not p.datos.get("sin_host")) else 0
-        emocion_cara = mini_meta.get("host") or mini_meta.get("pose") or "sorprendido"
-        tiene_rec = 1 if (mini_meta.get("stamp") and str(mini_meta.get("stamp")).lower() != "ninguno") else 0
-        n_pal_mini = len(texto_mini.split())
-
+        arch_mini = None
+        for nombre_m in ("miniatura_1080p.jpg", "miniatura_1080p.png", "miniatura.jpg", "miniatura.png"):
+            if p.ruta("publicacion", nombre_m).exists():
+                arch_mini = f"publicacion/{nombre_m}"
+                break
+        pose_m = mini_meta.get("host") or mini_meta.get("pose")
+        con_avatar_m = mini_meta.get("layout") not in ("sin_avatar",) and (mini_meta.get("avatar") or pose_m)
+        stamp = mini_meta.get("stamp") or mini_meta.get("sello")
         guardar_miniatura({
             "video_id": slug,
             "archivo": arch_mini,
-            "n_palabras": n_pal_mini,
-            "colores_dominantes": mini_meta.get("colores_dominantes") or ["#FFCC00", "#0B0C10"],
-            "tiene_cara": tiene_cara,
-            "emocion_cara": emocion_cara,
-            "tiene_rec": tiene_rec,
+            "n_palabras": len(texto_mini.split()) if (arch_mini and texto_mini) else None,
+            "colores_dominantes": mini_meta.get("colores_dominantes") if arch_mini else None,
+            "tiene_cara": (1 if con_avatar_m else 0) if arch_mini else None,
+            "emocion_cara": pose_m if (arch_mini and pose_m) else None,
+            "tiene_rec": (1 if (stamp and str(stamp).lower() != "ninguno") else 0) if arch_mini else None,
         })
 
         # -------------------------------------------------------------------
@@ -449,7 +621,7 @@ def registrar_proyecto_completo(
             "video_id": slug,
             "tomas_rechazadas_lente": tomas_rechazadas,
             "motivos_rechazo": motivos_rechazo,
-            "reclamos_content_id": 0,
+            "reclamos_content_id": None,
         })
 
         return True

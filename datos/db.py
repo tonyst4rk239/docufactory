@@ -21,7 +21,8 @@ SCHEMA_PATH = DIR_DATOS / "schema.sql"
 
 def obtener_conexion(ruta_db: Optional[Path] = None) -> sqlite3.Connection:
     """Abre conexión con SQLite habilitando claves foráneas y Row factory."""
-    ruta = Path(ruta_db or DB_PATH)
+    import os
+    ruta = Path(ruta_db or os.environ.get("DOCUFACTORY_DB") or DB_PATH)
     ruta.parent.mkdir(parents=True, exist_ok=True)
     primera_vez = not ruta.exists() or ruta.stat().st_size == 0
     con = sqlite3.connect(str(ruta), timeout=30.0)
@@ -89,6 +90,75 @@ def analizar_caracteristicas_titulo(titulo: str) -> dict[str, Any]:
     }
 
 
+# Lugares conocidos (México y referencias frecuentes del canal). Se detectan siempre, con o sin preposición.
+LUGARES_CONOCIDOS = {
+    "México", "Ciudad de México", "CDMX", "Aguascalientes", "Baja California", "Campeche", "Chiapas", "Chihuahua",
+    "Coahuila", "Colima", "Durango", "Guanajuato", "Guerrero", "Hidalgo", "Jalisco", "Michoacán", "Morelos",
+    "Nayarit", "Nuevo León", "Oaxaca", "Puebla", "Querétaro", "Quintana Roo", "San Luis Potosí", "Sinaloa",
+    "Sonora", "Tabasco", "Tamaulipas", "Tlaxcala", "Veracruz", "Yucatán", "Zacatecas", "Mérida", "Monterrey",
+    "Guadalajara", "Tijuana", "Ciudad Juárez", "Cancún", "Acapulco", "Xochimilco", "Teotihuacán", "Tlatelolco",
+    "Tenochtitlan", "Tenochtitlán", "Chichén Itzá", "Palenque", "Mictlán", "Estados Unidos", "España", "Roma",
+    "Italia", "Francia", "Florencia", "Vaticano", "Egipto", "Japón", "China", "Perú", "Colombia", "Argentina",
+    "Guatemala", "Texas", "California", "Nueva York", "Los Ángeles", "Londres", "París", "Turquía", "Ararat",
+}
+# Palabras con mayúscula que siguen a "en/hacia/desde" pero NO son lugares
+NO_LUGARES = {
+    "Muertos", "Día", "Dios", "Diablo", "Octubre", "Noviembre", "Enero", "Febrero", "Marzo", "Abril", "Mayo",
+    "Junio", "Julio", "Agosto", "Septiembre", "Diciembre", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes",
+    "Sábado", "Domingo", "Internet", "Facebook", "TikTok", "YouTube", "Google", "El", "La", "Los", "Las", "Un",
+    "Una", "Su", "Sus", "Este", "Esta", "Ese", "Esa", "Aquel", "Todo", "Toda", "Nadie", "Alguien",
+}
+
+
+def extraer_lugares(texto: str) -> list[str]:
+    """Lugares mencionados: lista conocida + nombres propios tras 'en/hacia/desde/cerca de' (no 'de', que
+    atrapaba personas y fiestas: 'de Sahagún', 'Día de Muertos')."""
+    encontrados: set[str] = set()
+    for lugar in LUGARES_CONOCIDOS:
+        if re.search(rf"(?<![\wÁÉÍÓÚáéíóúÑñ]){re.escape(lugar)}(?![\wÁÉÍÓÚáéíóúÑñ])", texto):
+            encontrados.add(lugar)
+    for m in re.finditer(
+        r"\b(?:en|hacia|desde|cerca de|rumbo a)\s+((?:el|la|los|las)\s+)?([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+(?:de\s+)?[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)",
+        texto,
+    ):
+        cand = m.group(2)
+        primera = cand.split()[0]
+        if primera in NO_LUGARES or cand in NO_LUGARES:
+            continue
+        # Evita inicio de oración tras punto ("en. Luego") y nombres de persona conocidos de cronistas
+        if cand in {"Sahagún", "Bernardino", "Lente"}:
+            continue
+        encontrados.add(cand)
+    # Si "Ciudad de México" está, no repetir "México" suelto
+    if "Ciudad de México" in encontrados:
+        encontrados.discard("México")
+    return sorted(encontrados)
+
+
+def _normalizar_estado(estado: Any) -> Optional[str]:
+    """oculto | publico (YouTube private/unlisted -> oculto, public -> publico)."""
+    if estado is None:
+        return None
+    e = str(estado).strip().lower()
+    if e in ("public", "publico", "público", "published", "completado", "yapublicado"):
+        return "publico"
+    if e in ("private", "unlisted", "privado", "oculto", "no listado", "programado", "scheduled"):
+        return "oculto"
+    return e or None
+
+
+def asegurar_video(video_id: str, con: sqlite3.Connection, datos_min: Optional[dict[str, Any]] = None) -> None:
+    """Crea una fila mínima en videos si no existe (para no perder publicaciones por la FK)."""
+    if con.execute("SELECT 1 FROM videos WHERE id = ?", (video_id,)).fetchone():
+        return
+    d = datos_min or {}
+    con.execute(
+        "INSERT INTO videos (id, slug, formato, tema, titulo, descripcion, hashtags) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (video_id, video_id, d.get("formato") or "desconocido", d.get("tema") or d.get("titulo") or video_id,
+         d.get("titulo"), d.get("descripcion"), d.get("hashtags")),
+    )
+
+
 def analizar_legibilidad_guion(texto_completo: str) -> dict[str, Any]:
     """Calcula métricas de texto, preguntas abiertas y entidades temporales/geográficas."""
     t = (texto_completo or "").strip()
@@ -112,11 +182,7 @@ def analizar_legibilidad_guion(texto_completo: str) -> dict[str, Any]:
 
     # Menciones de años (ej. 1945, 2026) y lugares
     fechas = sorted(list(set(re.findall(r"\b(1[89]\d\d|20\d\d)\b", t))))
-    palabras_lugares = re.findall(
-        r"\b(?:en|de|hacia|cerca de)\s+([A-ZÁÉÍÓÚ][a-záéíóú]+(?:\s+[A-ZÁÉÍÓÚ][a-záéíóú]+)?)\b",
-        t,
-    )
-    lugares = sorted(list(set(palabras_lugares)))
+    lugares = extraer_lugares(t)
 
     # Menciones de caso real / documentos oficiales / testigos
     palabras_caso_real = {"caso", "documento", "cia", "fbi", "archivo", "oficial", "desclasificado", "testigo", "víctima", "victima", "investigación", "informe"}
@@ -459,6 +525,15 @@ def guardar_publicacion(datos: dict[str, Any], con: Optional[sqlite3.Connection]
         # Verificar si ya existe por video_id y plataforma
         vid = datos["video_id"]
         plat = datos["plataforma"]
+        datos = {**datos, "estado": _normalizar_estado(datos.get("estado"))}
+        asegurar_video(vid, c, datos.get("video_min"))
+        # Guarda el texto publicado (caption/descripcion) en el video si aún no lo tenía
+        if datos.get("descripcion"):
+            tags = " ".join(dict.fromkeys(re.findall(r"#[\wáéíóúñÁÉÍÓÚÑ]+", datos["descripcion"]))) or None
+            c.execute(
+                "UPDATE videos SET descripcion = coalesce(nullif(descripcion, ''), ?), hashtags = coalesce(nullif(hashtags, ''), ?) WHERE id = ?",
+                (datos["descripcion"], tags, vid),
+            )
         cur = c.execute(
             "SELECT id FROM publicaciones WHERE video_id = ? AND plataforma = ? AND (url = ? OR video_platform_id = ?)",
             (vid, plat, datos.get("url"), datos.get("video_platform_id")),
@@ -483,7 +558,7 @@ def guardar_publicacion(datos: dict[str, Any], con: Optional[sqlite3.Connection]
                 INSERT INTO publicaciones (video_id, plataforma, url, fecha_hora_publicacion, estado, video_platform_id)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (vid, plat, datos.get("url"), datos.get("fecha_hora_publicacion"), datos.get("estado", "publico"), datos.get("video_platform_id")),
+                (vid, plat, datos.get("url"), datos.get("fecha_hora_publicacion"), datos.get("estado") or "publico", datos.get("video_platform_id")),
             )
             pub_id = cur_ins.lastrowid
         if con is None:

@@ -32,10 +32,14 @@ class TestAnaliticas(unittest.TestCase):
         self.assertIsNone(detectar_tema_sugerido("Buen video amigos sigan así."))
 
     def test_stubs_redes(self):
-        res_fb = actualizar_facebook()
-        self.assertIn("videos_procesados", res_fb)
-        res_tt = actualizar_tiktok()
-        self.assertIn("videos_procesados", res_tt)
+        import os
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"DOCUFACTORY_DB": os.path.join(tmp, "t.db")}):
+            res_fb = actualizar_facebook()
+            self.assertIn("videos_procesados", res_fb)
+            res_tt = actualizar_tiktok()
+            self.assertIn("videos_procesados", res_tt)
 
 
 if __name__ == "__main__":
