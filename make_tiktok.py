@@ -177,7 +177,7 @@ def cmd_renderizar(args) -> int:
     duraciones = etapa_voz_tiktok(p, guion)
 
     print(f"\n🚀 Renderizando video vertical TikTok: '{p.tema}' ({p.datos['slug']})\n")
-    resultado_render = etapa_render_tiktok(p, guion, duraciones)
+    resultado_render = etapa_render_tiktok(p, guion, duraciones, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
     if isinstance(resultado_render, dict):
         video_con_voz = resultado_render.get("video_con_voz")
         video_sin_voz = resultado_render.get("video_sin_voz")
@@ -230,7 +230,7 @@ def cmd_continuar(args) -> int:
     generar_revision_broll(p, formato="9:16")
 
     # 4. Render 1080x1920 con Avatar en esquina y Subtítulos Hormozi
-    resultado_render = etapa_render_tiktok(p, guion, duraciones)
+    resultado_render = etapa_render_tiktok(p, guion, duraciones, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
     if isinstance(resultado_render, dict):
         video_con_voz = resultado_render.get("video_con_voz")
         video_sin_voz = resultado_render.get("video_sin_voz")
@@ -297,6 +297,7 @@ def main():
     p_imp.add_argument("--solo-guion", action="store_true", help="Solo valida el JSON y genera guion_doblaje.md sin renderizar")
     p_imp.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
     p_imp.add_argument("--publicar", action="store_true", help="Sube automáticamente a redes tras terminar")
+    p_imp.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas")
     p_imp.set_defaults(func=cmd_importar)
 
     p_nuevo = subs.add_parser("nuevo", help="Crea guion vertical")
@@ -324,11 +325,13 @@ def main():
     p_rnd.add_argument("slug", help="Slug del proyecto")
     p_rnd.add_argument("--forzar", action="store_true", help="Fuerza el render ignorando escenas pendientes o rechazadas")
     p_rnd.add_argument("--publicar", action="store_true", help="Sube automáticamente a redes tras terminar")
+    p_rnd.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas")
     p_rnd.set_defaults(func=cmd_renderizar)
 
     p_cont = subs.add_parser("continuar", help="Renderiza proyecto existente de corrido")
     p_cont.add_argument("slug", help="Slug del proyecto")
     p_cont.add_argument("--publicar", action="store_true", help="Sube automáticamente a redes tras terminar")
+    p_cont.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas")
     p_cont.set_defaults(func=cmd_continuar)
 
     p_auto = subs.add_parser("auto", help="Genera y renderiza sin pausas")
@@ -336,6 +339,7 @@ def main():
     p_auto.add_argument("--segundos", type=int, default=30, help="Duración en segundos (default: 30)")
     p_auto.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
     p_auto.add_argument("--publicar", action="store_true", help="Sube automáticamente a redes tras terminar")
+    p_auto.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas")
     p_auto.set_defaults(func=cmd_auto)
 
     p_est = subs.add_parser("estado", help="Ver estado del proyecto y resumen de revisión")

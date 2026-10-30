@@ -141,6 +141,7 @@ def render_clip_vertical(
     cfg: dict | None = None,
     tono: str = "misterio",
     estilo_color=None,
+    ajuste_brillo: float = 0.0,
 ):
     """Convierte cualquier video en 1080x1920 con zoom punch en palabras clave, grado de color oscuro,
     viñeta, grano ligero FFmpeg, overlay screen y host en esquina inferior."""
@@ -151,7 +152,7 @@ def render_clip_vertical(
 
     # 1. Fondo 9:16 con Zoom Punch + Grado de Color + Viñeta + Grano
     zp_expr = construir_filtro_zoom_punch_vertical(duracion, 1080, 1920, 30, cfg=cfg)
-    look_expr = construir_filtro_color_textura(mood="misterio", formato="vertical_9_16", es_inicio_top=(idx_escena == 1), cfg=cfg, tono=tono, estilo_color=estilo_color)
+    look_expr = construir_filtro_color_textura(mood="misterio", formato="vertical_9_16", es_inicio_top=(idx_escena == 1), cfg=cfg, tono=tono, estilo_color=estilo_color, ajuste_brillo=ajuste_brillo)
     filtros = [f"[0:v]{zp_expr},{look_expr}[bg_graded]"]
     v_actual = "[bg_graded]"
 
@@ -197,7 +198,7 @@ def render_clip_vertical(
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, float]) -> Path:
+def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, float], sin_normalizar_brillo: bool = False) -> Path:
     ffmpeg = config.ffmpeg_bin("ffmpeg")
     cfg = cargar_config_edicion()
     carpeta_renders = p.carpeta / "renders"
@@ -205,10 +206,35 @@ def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, f
     temp_dir = carpeta_renders / "temp_vertical"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
+    # Normalización automática de brillo entre micro-escenas consecutivas
+    cfg_nb = cfg.get("normalizacion_brillo", {})
+    fmt_cfg = cfg.get("formatos", {}).get("vertical_9_16", {})
+    usar_norm_brillo = bool(
+        fmt_cfg.get("normalizar_brillo", True)
+        and cfg_nb.get("enabled", True)
+        and not sin_normalizar_brillo
+    )
+    ajustes_brillo: list[float] = [0.0] * len(guion.escenas)
+    if usar_norm_brillo and len(guion.escenas) > 1:
+        from src.edicion import medir_luminancia_media, calcular_ajustes_luminancia
+        archivos_broll = [p.ruta("b_roll", f"escena_{esc.id:03d}.mp4") for esc in guion.escenas]
+        lums = [medir_luminancia_media(f, ffmpeg=ffmpeg) if f.exists() else None for f in archivos_broll]
+        umbral_s = float(cfg_nb.get("umbral_salto", 40.0))
+        target_l = float(cfg_nb.get("target_luminancia", 120.0))
+        rango_t = tuple(cfg_nb.get("rango_target", [115.0, 125.0]))
+        ajustes_brillo = calcular_ajustes_luminancia(lums, umbral_salto=umbral_s, target_y=target_l, rango_target=rango_t)
+        
+        ajustes_aplicados = [(i + 1, aj, lums[i]) for i, aj in enumerate(ajustes_brillo) if abs(aj) > 0.001]
+        if ajustes_aplicados:
+            print(f"⚖️ Normalización de brillo activa en Reel ({len(ajustes_aplicados)} escenas ajustadas para evitar saltos > {umbral_s}):")
+            for esc_id, aj, lum in ajustes_aplicados:
+                lum_str = f"{lum:.1f}" if lum is not None else "N/D"
+                print(f"   • Micro-escena {esc_id:02d}: luma original {lum_str} -> ajuste eq=brightness={aj:+.2f}")
+
     print("🎨 Generando clips verticales 1080x1920 (cortes rápidos 2-3s, zoom punch, color grade y Karaoke)...")
     clips_v = []
 
-    for esc in guion.escenas:
+    for idx_esc, esc in enumerate(guion.escenas):
         dur = duraciones.get(esc.id, 2.5)
         broll_f = p.ruta("b_roll", f"escena_{esc.id:03d}.mp4")
         if not broll_f.exists():
@@ -228,9 +254,11 @@ def etapa_render_tiktok(p: Proyecto, guion: GuionTikTok, duraciones: dict[int, f
         usar_avatar = bool(getattr(guion, "usar_avatar", True)) and not p.datos.get("sin_host", False)
         host_png = obtener_sprite(esc.pose_host, boca="cerrada", mood="misterio", tema=p.tema, texto_voz=esc.voz) if usar_avatar else None
 
+        ajuste_esc = ajustes_brillo[idx_esc]
         render_clip_vertical(ffmpeg, broll_f, host_png, dur, out_v, idx_escena=esc.id, cfg=cfg,
                              tono=getattr(guion, "tono", "misterio") or "misterio",
-                             estilo_color=getattr(guion, "estilo_color", None))
+                             estilo_color=getattr(guion, "estilo_color", None),
+                             ajuste_brillo=ajuste_esc)
         clips_v.append(out_v)
 
     concat_txt = temp_dir / "concat_vertical.txt"

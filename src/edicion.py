@@ -13,6 +13,7 @@ Lee `config/edicion.yaml` y construye los filtros visuales y sonoros para:
 from __future__ import annotations
 
 import copy
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
@@ -97,6 +98,7 @@ DEFAULT_EDICION_CONFIG: dict[str, Any] = {
             "transiciones_xfade": True,
             "top_rank_fx": True,
             "audio_ducking_sidechain": True,
+            "normalizar_brillo": True,
         },
         "vertical_9_16": {
             "fps": 30,
@@ -110,7 +112,14 @@ DEFAULT_EDICION_CONFIG: dict[str, Any] = {
             "zoom_punch": True,
             "subtitulos_karaoke": True,
             "audio_ducking_sidechain": True,
+            "normalizar_brillo": True,
         },
+    },
+    "normalizacion_brillo": {
+        "enabled": True,
+        "umbral_salto": 40.0,
+        "target_luminancia": 120.0,
+        "rango_target": [115.0, 125.0],
     },
     "color_grading": {
         "enabled": True,
@@ -346,6 +355,74 @@ def resolver_overlay_por_mood(
     return None, "ffmpeg_grain"
 
 
+def medir_luminancia_media(ruta: Path, ffmpeg: Optional[str] = None) -> Optional[float]:
+    """Mide la luminancia media YAVG (escala 0-255) de un video o imagen usando FFmpeg signalstats.
+    
+    Analiza hasta 6 cuadros distribuidos en el archivo. Retorna None si el archivo no existe
+    o no se puede analizar.
+    """
+    if not ruta or not Path(ruta).exists() or Path(ruta).stat().st_size < 100:
+        return None
+    ffmpeg_bin = ffmpeg or config.ffmpeg_bin("ffmpeg") or "ffmpeg"
+    try:
+        cmd = [
+            ffmpeg_bin, "-hide_banner", "-loglevel", "info",
+            "-i", str(ruta),
+            "-vf", "select='not(mod(n\\,10))',signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+            "-frames:v", "6",
+            "-f", "null", "-",
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+        salida = (res.stdout or "") + "\n" + (res.stderr or "")
+        vals = [float(m.group(1)) for m in re.finditer(r"YAVG=(\d+(?:\.\d+)?)", salida)]
+        if vals:
+            return sum(vals) / len(vals)
+    except Exception:
+        pass
+    return None
+
+
+def calcular_ajustes_luminancia(
+    luminancias: list[Optional[float]],
+    umbral_salto: float = 40.0,
+    target_y: float = 120.0,
+    rango_target: tuple[float, float] = (115.0, 125.0),
+) -> list[float]:
+    """Calcula los ajustes de brillo (escala FFmpeg eq=brightness [-1.0, 1.0]) para cada escena.
+    
+    Regla:
+    - Si entre dos escenas seguidas el salto de luminancia es mayor a umbral_salto (por defecto 40.0 en escala 0-255),
+      ajusta con eq=brightness la toma más brillante para quedar en una media de target_y (~115-125).
+    - Si la toma más brillante ya está dentro de rango_target o por debajo, no se altera.
+    - Respeta la dirección y el tono reduciendo el brillo de la toma que genera el choque visual.
+    """
+    if not luminancias or len(luminancias) < 2:
+        return [0.0] * len(luminancias)
+
+    n = len(luminancias)
+    ajustes = [0.0] * n
+    y_vals = [float(v) if v is not None else float(target_y) for v in luminancias]
+    min_target, max_target = rango_target
+
+    cambio = True
+    pasadas = 0
+    while cambio and pasadas < n:
+        cambio = False
+        pasadas += 1
+        for i in range(n - 1):
+            salto = abs(y_vals[i] - y_vals[i + 1])
+            if salto > umbral_salto:
+                idx_brillante = i if y_vals[i] > y_vals[i + 1] else (i + 1)
+                if y_vals[idx_brillante] > max_target:
+                    delta_y = target_y - y_vals[idx_brillante]
+                    ajuste = max(-0.5, min(0.5, delta_y / 255.0))
+                    ajustes[idx_brillante] += ajuste
+                    y_vals[idx_brillante] = target_y
+                    cambio = True
+
+    return ajustes
+
+
 def construir_filtro_color_textura(
     mood: str = "misterio",
     formato: str = "horizontal_16_9",
@@ -353,6 +430,7 @@ def construir_filtro_color_textura(
     cfg: Optional[dict[str, Any]] = None,
     tono: Optional[str] = None,
     estilo_color: Any = None,
+    ajuste_brillo: float = 0.0,
 ) -> str:
     """Construye la cadena de filtros FFmpeg para grado de color por mood, viñeta, grano y flash/glitch en Top #N."""
     cfg = cfg or cargar_config_edicion()
@@ -367,7 +445,7 @@ def construir_filtro_color_textura(
         m_cfg = resolver_grado(tono, estilo_color, tonos_map)
         sat = float(m_cfg.get("saturation", 0.88))
         con = float(m_cfg.get("contrast", 1.05))
-        bri = float(m_cfg.get("brightness", 0.00))
+        bri = float(m_cfg.get("brightness", 0.00)) + float(ajuste_brillo)
         partes.append(f"eq=saturation={sat:.2f}:contrast={con:.2f}:brightness={bri:.2f}")
         cb = (m_cfg.get("colorbalance") or "").strip()
         if cb:
@@ -375,6 +453,8 @@ def construir_filtro_color_textura(
         curves_expr = (m_cfg.get("curves") or "").strip()
         if curves_expr:
             partes.append(f"curves={curves_expr}")
+    elif abs(ajuste_brillo) > 0.001:
+        partes.append(f"eq=brightness={ajuste_brillo:.2f}")
 
     # 2. Flash + Glitch (rgbashift) al inicio de cada puesto TOP #N
     top_fx = cfg.get("top_rank_fx", {})

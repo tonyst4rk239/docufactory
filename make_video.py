@@ -68,12 +68,12 @@ def cmd_doctor(_args) -> int:
         f"     • 16:9 Documental: color_grading={h_cfg.get('color_grading')}, vignette={h_cfg.get('vignette')}, "
         f"grain={h_cfg.get('film_grain_ffmpeg')}, overlay={h_cfg.get('video_overlay')}, "
         f"ken_burns={h_cfg.get('ken_burns')}, xfade={h_cfg.get('transiciones_xfade')}, "
-        f"top_fx={h_cfg.get('top_rank_fx')}, sidechain={h_cfg.get('audio_ducking_sidechain')}"
+        f"top_fx={h_cfg.get('top_rank_fx')}, sidechain={h_cfg.get('audio_ducking_sidechain')}, norm_brillo={h_cfg.get('normalizar_brillo')}"
     )
     print(
         f"     • 9:16 Reels:      cortes={v_cfg.get('duracion_corte_min_s')}-{v_cfg.get('duracion_corte_max_s')}s, "
         f"karaoke={v_cfg.get('subtitulos_karaoke')}, zoom_punch={v_cfg.get('zoom_punch')}, "
-        f"sidechain={v_cfg.get('audio_ducking_sidechain')}"
+        f"sidechain={v_cfg.get('audio_ducking_sidechain')}, norm_brillo={v_cfg.get('normalizar_brillo')}"
     )
 
     print("\n== Identidad de Marca (Host Sprites) ==")
@@ -323,7 +323,7 @@ def cmd_renderizar(args) -> int:
     generar_srt(p, duraciones)
 
     # 2. Render Dual (Stems + Video IA + Video Karaoke)
-    salidas = etapa_render(p, duraciones)
+    salidas = etapa_render(p, duraciones, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
 
     # 3. Publicación
     etapa_publicacion(p, duraciones)
@@ -369,7 +369,7 @@ def cmd_continuar(args) -> int:
     generar_srt(p, duraciones)
 
     # 5. Render Dual (Stems + Video IA + Video Karaoke)
-    salidas = etapa_render(p, duraciones)
+    salidas = etapa_render(p, duraciones, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
 
     # 6. Publicación
     etapa_publicacion(p, duraciones)
@@ -405,7 +405,7 @@ def cmd_doblar(args) -> int:
     dur_esc = dur_humana / len(g.escenas)
     duraciones = {e.id: dur_esc for e in g.escenas}
 
-    salidas = etapa_render(p, duraciones, voz_humana=audio_humano)
+    salidas = etapa_render(p, duraciones, voz_humana=audio_humano, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
     print("\n" + "=" * 65)
     print("🎉 ¡VIDEO RE-SINCRONIZADO CON VOZ HUMANA!")
     print(f"📹 Video Final: {salidas['video_con_voz']}")
@@ -478,6 +478,7 @@ def main() -> int:
     imp.add_argument("--solo-guion", action="store_true", help="Solo valida el JSON y genera guion_doblaje.md sin renderizar")
     imp.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
     imp.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
+    imp.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas consecutivas")
     imp.set_defaults(fn=cmd_importar)
 
     n = sub.add_parser("nuevo")
@@ -508,6 +509,7 @@ def main() -> int:
     rnd.add_argument("slug", help="Slug del proyecto")
     rnd.add_argument("--forzar", action="store_true", help="Fuerza el render ignorando escenas pendientes o rechazadas")
     rnd.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
+    rnd.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas consecutivas")
     rnd.set_defaults(fn=cmd_renderizar)
 
     mini = sub.add_parser("miniatura", help="Genera miniaturas 16:9 de alto CTR para el proyecto (1080p y 720p)")
@@ -524,11 +526,13 @@ def main() -> int:
     c = sub.add_parser("continuar")
     c.add_argument("slug")
     c.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
+    c.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas consecutivas")
     c.set_defaults(fn=cmd_continuar)
 
     d = sub.add_parser("doblar")
     d.add_argument("slug")
     d.add_argument("--audio", required=True, help="Ruta al archivo .wav con la voz humana")
+    d.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas consecutivas")
     d.set_defaults(fn=cmd_doblar)
 
     a = sub.add_parser("auto")
@@ -537,6 +541,7 @@ def main() -> int:
     a.add_argument("--lang", default="es")
     a.add_argument("--reusar", action="store_true", help="Reutiliza la carpeta de proyecto existente con el mismo slug base")
     a.add_argument("--sin-host", action="store_true", help="Desactiva el avatar Host 2D en todos los planos")
+    a.add_argument("--sin-normalizar-brillo", action="store_true", help="Desactiva la normalización automática de brillo entre escenas consecutivas")
     a.set_defaults(fn=cmd_auto)
 
     s = sub.add_parser("estado")
