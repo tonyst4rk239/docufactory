@@ -677,35 +677,8 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
         and cfg_nb.get("enabled", True)
         and not sin_normalizar_brillo
     )
-    ajustes_brillo: list[float] = [0.0] * total
-    if usar_norm_brillo and total > 1:
-        from .edicion import medir_luminancia_media, calcular_ajustes_luminancia
-        archivos_fondo = []
-        for esc in guion.escenas:
-            ft = p.ruta("render", f"fondo_tomas_{esc.id:03d}.mp4")
-            bm = p.ruta("b_roll", f"escena_{esc.id:03d}.mp4")
-            bj = p.ruta("b_roll", f"escena_{esc.id:03d}.jpg")
-            if ft.exists() and es_video_valido(ft):
-                archivos_fondo.append(ft)
-            elif bm.exists() and es_video_valido(bm):
-                archivos_fondo.append(bm)
-            elif bj.exists():
-                archivos_fondo.append(bj)
-            else:
-                archivos_fondo.append(None)
-        
-        lums = [medir_luminancia_media(f, ffmpeg=ffmpeg) if f else None for f in archivos_fondo]
-        umbral_s = float(cfg_nb.get("umbral_salto", 40.0))
-        target_l = float(cfg_nb.get("target_luminancia", 120.0))
-        rango_t = tuple(cfg_nb.get("rango_target", [115.0, 125.0]))
-        ajustes_brillo = calcular_ajustes_luminancia(lums, umbral_salto=umbral_s, target_y=target_l, rango_target=rango_t)
-        
-        ajustes_aplicados = [(i + 1, aj, lums[i]) for i, aj in enumerate(ajustes_brillo) if abs(aj) > 0.001]
-        if ajustes_aplicados:
-            print(f"⚖️ Normalización de brillo activa ({len(ajustes_aplicados)} escenas ajustadas para evitar saltos > {umbral_s}):")
-            for esc_id, aj, lum in ajustes_aplicados:
-                lum_str = f"{lum:.1f}" if lum is not None else "N/D"
-                print(f"   • Escena {esc_id:02d}: luma original {lum_str} -> ajuste eq=brightness={aj:+.2f}")
+    ajustes_previos: list[float] = []
+    args_render: list[tuple] = []
 
     print(f"🎬 Renderizando visuales de {total} escenas (Color grade por mood, viñeta, grano, overlays y Ken Burns)...")
     clips_visuales: list[Path] = []
@@ -729,28 +702,43 @@ def etapa_render(p: Proyecto, duraciones: dict[int, float], voz_humana: Optional
 
         clip_path = temp_clips / f"vclip_{esc.id:03d}.mp4"
         meta_norm = temp_clips / f"vclip_{esc.id:03d}_norm.txt"
-        ajuste_esc = ajustes_brillo[i - 1]
+        # Ajuste con el que está renderizado el clip en caché (sin marca = 0.0)
+        try:
+            ajuste_cache = float(meta_norm.read_text(encoding="utf-8").strip()) if meta_norm.exists() else 0.0
+        except ValueError:
+            ajuste_cache = 0.0
+        ajuste_esc = ajuste_cache if usar_norm_brillo else 0.0
+        kw_render = dict(
+            es_cierre=es_cierre,
+            es_inicio_top=es_top,
+            cfg=cfg,
+            tono=getattr(guion, "tono", "misterio") or "misterio",
+            estilo_color=getattr(guion, "estilo_color", None),
+        )
+        args_render.append((esc, dur_clip_render, clip_path, meta_norm, kw_render))
         debe_renderizar = (
             not clip_path.exists()
             or clip_path.stat().st_size < 1000
-            or (meta_norm.exists() and meta_norm.read_text(encoding="utf-8").strip() != f"{ajuste_esc:.3f}")
-            or (not meta_norm.exists() and abs(ajuste_esc) > 0.001)
+            or abs(ajuste_cache - ajuste_esc) > 0.0005
         )
         if debe_renderizar:
-            renderizar_clip_visual(
-                p,
-                esc,
-                dur_clip_render,
-                clip_path,
-                es_cierre=es_cierre,
-                es_inicio_top=es_top,
-                cfg=cfg,
-                tono=getattr(guion, "tono", "misterio") or "misterio",
-                estilo_color=getattr(guion, "estilo_color", None),
-                ajuste_brillo=ajuste_esc,
-            )
+            renderizar_clip_visual(p, esc, dur_clip_render, clip_path, ajuste_brillo=ajuste_esc, **kw_render)
             meta_norm.write_text(f"{ajuste_esc:.3f}", encoding="utf-8")
+        ajustes_previos.append(ajuste_esc)
         clips_visuales.append(clip_path)
+
+    # Normalización de brillo medida sobre los clips YA graduados (post color grade)
+    if usar_norm_brillo and total > 1:
+        from .edicion import normalizar_brillo_clips
+
+        def _rerender(idx: int, ajuste: float) -> None:
+            esc_r, dur_r, clip_r, meta_r, kw_r = args_render[idx]
+            renderizar_clip_visual(p, esc_r, dur_r, clip_r, ajuste_brillo=ajuste, **kw_r)
+            meta_r.write_text(f"{ajuste:.3f}", encoding="utf-8")
+
+        print(f"⚖️ Normalización de brillo (post-grado, salto > {cfg_nb.get('umbral_salto', 40.0)}):")
+        normalizar_brillo_clips(clips_visuales, _rerender, cfg_nb=cfg_nb, ffmpeg=ffmpeg,
+                                ajustes_previos=ajustes_previos, etiqueta="Escena")
 
     # 3. Generar Tarjetas .ass y Ensamblar con Transiciones xfade (fade, fadeblack, smoothleft y glitch en TOP #N)
     print("🎨 Aplicando transiciones xfade y quemando tarjetas estilizadas TOP #N (.ass)...")

@@ -94,5 +94,38 @@ class TestNormalizarBrillo(unittest.TestCase):
             self.assertLess(lum, 100.0)
 
 
+
+
+class TestNormalizacionPostGrado(unittest.TestCase):
+    def test_aclara_toma_casi_negra(self):
+        aj = calcular_ajustes_luminancia([20.0, 110.0], umbral_salto=40.0, umbral_oscuro=45.0, target_oscuro=70.0)
+        self.assertAlmostEqual(aj[0], 50.0 / 255.0, places=3)
+        self.assertEqual(aj[1], 0.0)
+
+    def test_no_toca_oscura_moderada(self):
+        # 73 -> 120: salto > 40 pero ninguna fuera de rango (73 > umbral_oscuro, 120 en rango)
+        self.assertEqual(calcular_ajustes_luminancia([73.0, 120.0]), [0.0, 0.0])
+
+    def test_normalizar_clips_usa_luma_renderizada_y_refina(self):
+        from unittest import mock
+        import src.edicion as ed
+        estado = {"a": 73.0, "b": 155.0}
+        ajustes_hechos = {}
+
+        def medir(ruta, ffmpeg=None):
+            return estado[str(ruta)]
+
+        def rerender(i, ajuste):
+            ajustes_hechos[i] = ajuste
+            # respuesta no lineal: el grado atenúa el cambio
+            estado["b"] = 155.0 + ajuste * 255.0 * 0.8
+
+        with mock.patch.object(ed, "medir_luminancia_media", side_effect=medir):
+            aj = ed.normalizar_brillo_clips(["a", "b"], rerender, cfg_nb={})
+        self.assertEqual(aj[0], 0.0)
+        self.assertTrue(115.0 <= estado["b"] <= 125.0, estado["b"])
+        self.assertNotIn(0, ajustes_hechos)
+
+
 if __name__ == "__main__":
     unittest.main()

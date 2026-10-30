@@ -120,6 +120,8 @@ DEFAULT_EDICION_CONFIG: dict[str, Any] = {
         "umbral_salto": 40.0,
         "target_luminancia": 120.0,
         "rango_target": [115.0, 125.0],
+        "umbral_oscuro": 45.0,
+        "target_oscuro": 70.0,
     },
     "color_grading": {
         "enabled": True,
@@ -358,7 +360,7 @@ def resolver_overlay_por_mood(
 def medir_luminancia_media(ruta: Path, ffmpeg: Optional[str] = None) -> Optional[float]:
     """Mide la luminancia media YAVG (escala 0-255) de un video o imagen usando FFmpeg signalstats.
     
-    Analiza hasta 6 cuadros distribuidos en el archivo. Retorna None si el archivo no existe
+    Analiza 1 de cada 10 cuadros (hasta 60) en el archivo. Retorna None si el archivo no existe
     o no se puede analizar.
     """
     if not ruta or not Path(ruta).exists() or Path(ruta).stat().st_size < 100:
@@ -369,10 +371,10 @@ def medir_luminancia_media(ruta: Path, ffmpeg: Optional[str] = None) -> Optional
             ffmpeg_bin, "-hide_banner", "-loglevel", "info",
             "-i", str(ruta),
             "-vf", "select='not(mod(n\\,10))',signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
-            "-frames:v", "6",
+            "-frames:v", "60",
             "-f", "null", "-",
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
         salida = (res.stdout or "") + "\n" + (res.stderr or "")
         vals = [float(m.group(1)) for m in re.finditer(r"YAVG=(\d+(?:\.\d+)?)", salida)]
         if vals:
@@ -387,22 +389,25 @@ def calcular_ajustes_luminancia(
     umbral_salto: float = 40.0,
     target_y: float = 120.0,
     rango_target: tuple[float, float] = (115.0, 125.0),
+    umbral_oscuro: float = 45.0,
+    target_oscuro: float = 70.0,
 ) -> list[float]:
-    """Calcula los ajustes de brillo (escala FFmpeg eq=brightness [-1.0, 1.0]) para cada escena.
-    
-    Regla:
-    - Si entre dos escenas seguidas el salto de luminancia es mayor a umbral_salto (por defecto 40.0 en escala 0-255),
-      ajusta con eq=brightness la toma más brillante para quedar en una media de target_y (~115-125).
-    - Si la toma más brillante ya está dentro de rango_target o por debajo, no se altera.
-    - Respeta la dirección y el tono reduciendo el brillo de la toma que genera el choque visual.
+    """Calcula los ajustes de brillo (escala FFmpeg eq=brightness) para cada escena.
+
+    Las luminancias deben medirse DESPUÉS del grado de color (clip ya renderizado).
+    Regla, para cada par consecutivo con salto > umbral_salto:
+    - Si la toma brillante está por encima de rango_target, se baja a target_y.
+    - Si no, y la toma oscura está por debajo de umbral_oscuro (casi negra), se sube a target_oscuro.
+    - Las tomas dentro de rango_target (o entre ambos umbrales) no se tocan.
     """
     if not luminancias or len(luminancias) < 2:
         return [0.0] * len(luminancias)
 
     n = len(luminancias)
     ajustes = [0.0] * n
+    conocidos = [v is not None for v in luminancias]
     y_vals = [float(v) if v is not None else float(target_y) for v in luminancias]
-    min_target, max_target = rango_target
+    _min_target, max_target = rango_target
 
     cambio = True
     pasadas = 0
@@ -410,16 +415,82 @@ def calcular_ajustes_luminancia(
         cambio = False
         pasadas += 1
         for i in range(n - 1):
-            salto = abs(y_vals[i] - y_vals[i + 1])
-            if salto > umbral_salto:
-                idx_brillante = i if y_vals[i] > y_vals[i + 1] else (i + 1)
-                if y_vals[idx_brillante] > max_target:
-                    delta_y = target_y - y_vals[idx_brillante]
-                    ajuste = max(-0.5, min(0.5, delta_y / 255.0))
-                    ajustes[idx_brillante] += ajuste
-                    y_vals[idx_brillante] = target_y
-                    cambio = True
+            if not (conocidos[i] and conocidos[i + 1]):
+                continue
+            if abs(y_vals[i] - y_vals[i + 1]) <= umbral_salto:
+                continue
+            idx_b, idx_o = (i, i + 1) if y_vals[i] > y_vals[i + 1] else (i + 1, i)
+            if y_vals[idx_b] > max_target:
+                ajustes[idx_b] += max(-0.5, min(0.5, (target_y - y_vals[idx_b]) / 255.0))
+                y_vals[idx_b] = target_y
+                cambio = True
+            elif y_vals[idx_o] < umbral_oscuro:
+                ajustes[idx_o] += max(-0.5, min(0.5, (target_oscuro - y_vals[idx_o]) / 255.0))
+                y_vals[idx_o] = target_oscuro
+                cambio = True
 
+    return ajustes
+
+
+def normalizar_brillo_clips(
+    clips: list,
+    rerender,
+    cfg_nb: Optional[dict[str, Any]] = None,
+    ffmpeg: Optional[str] = None,
+    ajustes_previos: Optional[list[float]] = None,
+    etiqueta: str = "Escena",
+    refinar: int = 1,
+) -> list[float]:
+    """Normaliza brillo midiendo los clips YA renderizados (post color grade).
+
+    clips: rutas de los clips finales de cada escena.
+    rerender(i, ajuste): vuelve a renderizar el clip i con eq=brightness extra = ajuste.
+    ajustes_previos: ajuste con el que ya se renderizó cada clip (por caché), para estimar su luma base.
+    Devuelve el ajuste final por escena. Tras el primer pase mide de nuevo y corrige el residuo
+    (las curvas del grado no son lineales) hasta `refinar` veces.
+    """
+    cfg_nb = cfg_nb or {}
+    n = len(clips)
+    previos = list(ajustes_previos or [0.0] * n)
+    medidas = [medir_luminancia_media(c, ffmpeg=ffmpeg) if c else None for c in clips]
+    base = [(m - previos[i] * 255.0) if m is not None else None for i, m in enumerate(medidas)]
+    target_y = float(cfg_nb.get("target_luminancia", 120.0))
+    rango = tuple(cfg_nb.get("rango_target", [115.0, 125.0]))
+    target_o = float(cfg_nb.get("target_oscuro", 70.0))
+    ajustes = calcular_ajustes_luminancia(
+        base,
+        umbral_salto=float(cfg_nb.get("umbral_salto", 40.0)),
+        target_y=target_y,
+        rango_target=rango,
+        umbral_oscuro=float(cfg_nb.get("umbral_oscuro", 45.0)),
+        target_oscuro=target_o,
+    )
+    for i in range(n):
+        if abs(ajustes[i] - previos[i]) > 0.004:
+            rerender(i, ajustes[i])
+    for _ in range(max(0, refinar)):
+        otra = False
+        for i in range(n):
+            if abs(ajustes[i]) < 0.001 or not clips[i]:
+                continue
+            y = medir_luminancia_media(clips[i], ffmpeg=ffmpeg)
+            if y is None:
+                continue
+            meta = target_y if ajustes[i] < 0 else target_o
+            lo, hi = (rango if ajustes[i] < 0 else (target_o - 5.0, target_o + 5.0))
+            if lo <= y <= hi:
+                continue
+            ajustes[i] = max(-0.5, min(0.5, ajustes[i] + (meta - y) / 255.0))
+            rerender(i, ajustes[i])
+            otra = True
+        if not otra:
+            break
+    for i, aj in enumerate(ajustes):
+        if abs(aj) > 0.001:
+            y = medir_luminancia_media(clips[i], ffmpeg=ffmpeg)
+            b = f"{base[i]:.1f}" if base[i] is not None else "N/D"
+            f = f"{y:.1f}" if y is not None else "N/D"
+            print(f"   ⚖️ {etiqueta} {i + 1:02d}: luma post-grado {b} -> {f} (eq=brightness {aj:+.3f})")
     return ajustes
 
 
