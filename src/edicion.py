@@ -439,7 +439,7 @@ def normalizar_brillo_clips(
     ffmpeg: Optional[str] = None,
     ajustes_previos: Optional[list[float]] = None,
     etiqueta: str = "Escena",
-    refinar: int = 1,
+    refinar: int = 2,
 ) -> list[float]:
     """Normaliza brillo midiendo los clips YA renderizados (post color grade).
 
