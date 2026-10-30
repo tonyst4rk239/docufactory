@@ -140,6 +140,19 @@ def cmd_revisar(args) -> int:
         formato="9:16",
     )
     print(salida)
+    try:
+        from datos.db import guardar_produccion
+        rev_path = p.ruta("b_roll", "revision.json")
+        if rev_path.exists():
+            rev_datos = json.loads(rev_path.read_text(encoding="utf-8"))
+            rech = [e for e in rev_datos.get("escenas") or [] if e.get("decision") == "rechazada"]
+            guardar_produccion({
+                "video_id": p.datos.get("slug"),
+                "tomas_rechazadas_lente": len(rech),
+                "motivos_rechazo": [e.get("motivo") for e in rech if e.get("motivo")],
+            })
+    except Exception as e:
+        print(f"⚠️ Aviso: no se pudo registrar revisión en SQLite ({e})")
     return 0 if ok else 1
 
 
@@ -178,6 +191,11 @@ def cmd_renderizar(args) -> int:
 
     print(f"\n🚀 Renderizando video vertical TikTok: '{p.tema}' ({p.datos['slug']})\n")
     resultado_render = etapa_render_tiktok(p, guion, duraciones, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
+    try:
+        from datos.registrar import registrar_proyecto_completo
+        registrar_proyecto_completo(p, duraciones)
+    except Exception as e:
+        print(f"⚠️ Aviso: no se pudieron registrar métricas en SQLite ({e})")
     if isinstance(resultado_render, dict):
         video_con_voz = resultado_render.get("video_con_voz")
         video_sin_voz = resultado_render.get("video_sin_voz")
@@ -231,6 +249,11 @@ def cmd_continuar(args) -> int:
 
     # 4. Render 1080x1920 con Avatar en esquina y Subtítulos Hormozi
     resultado_render = etapa_render_tiktok(p, guion, duraciones, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
+    try:
+        from datos.registrar import registrar_proyecto_completo
+        registrar_proyecto_completo(p, duraciones)
+    except Exception as e:
+        print(f"⚠️ Aviso: no se pudieron registrar métricas en SQLite ({e})")
     if isinstance(resultado_render, dict):
         video_con_voz = resultado_render.get("video_con_voz")
         video_sin_voz = resultado_render.get("video_sin_voz")

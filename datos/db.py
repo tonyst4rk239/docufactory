@@ -158,6 +158,33 @@ def medir_lufs(ruta_audio_o_video: Path, ffmpeg: Optional[str] = None) -> Option
     return None
 
 
+def medir_luminancia_media(ruta: Path, ffmpeg: Optional[str] = None) -> Optional[float]:
+    """Mide la luminancia media YAVG (escala 0-255) de un archivo multimedia usando signalstats."""
+    if not ruta or not Path(ruta).exists() or Path(ruta).is_dir():
+        return None
+    try:
+        from src import config
+        ffmpeg_bin = ffmpeg or config.ffmpeg_bin("ffmpeg") or "ffmpeg"
+    except Exception:
+        ffmpeg_bin = ffmpeg or "ffmpeg"
+    try:
+        cmd = [
+            ffmpeg_bin, "-hide_banner", "-loglevel", "info",
+            "-i", str(ruta),
+            "-vf", "select='not(mod(n\\,10))',signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+            "-frames:v", "6",
+            "-f", "null", "-",
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12)
+        salida = (res.stdout or "") + "\n" + (res.stderr or "")
+        vals = [float(m.group(1)) for m in re.finditer(r"YAVG=(\d+(?:\.\d+)?)", salida)]
+        if vals:
+            return sum(vals) / len(vals)
+    except Exception:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Funciones de Inserción / Upsert
 # ---------------------------------------------------------------------------

@@ -30,6 +30,16 @@ from src.uploader.facebook_perfil_uploader import (
 )
 
 
+def _deducir_slug(video_path: Path) -> str:
+    """Extrae el slug del proyecto desde la ruta del video."""
+    parts = video_path.resolve().parts
+    if "proyectos" in parts:
+        idx = parts.index("proyectos")
+        if idx + 1 < len(parts):
+            return parts[idx + 1].replace("video_", "")
+    return video_path.stem.replace("_con_voz_ia", "").replace("_sin_voz", "")
+
+
 def cmd_status(args) -> int:
     print("\n" + "=" * 65)
     print("📊 ESTADO DE CONEXIÓN MULTI-PLATAFORMA")
@@ -122,6 +132,19 @@ def cmd_subir(args) -> int:
                 privacidad=args.privacidad, es_short=not args.largo, miniatura=args.miniatura,
             )
             print(f"YT_RESULT video_id={res['video_id']} url={res['url']} privacidad={res['privacidad']} miniatura_ok={res['miniatura_ok']}")
+            try:
+                from datetime import timezone
+                from datos.db import guardar_publicacion
+                guardar_publicacion({
+                    "video_id": _deducir_slug(video_path),
+                    "plataforma": "youtube",
+                    "url": res.get("url"),
+                    "fecha_hora_publicacion": datetime.now(timezone.utc).isoformat(),
+                    "estado": args.privacidad,
+                    "video_platform_id": res.get("video_id"),
+                })
+            except Exception as e:
+                print(f"⚠️ Aviso: No se pudo registrar publicación en SQLite ({e})")
         except Exception as e:
             print(f"❌ Error subiendo a YouTube: {e}")
             errores.append("YouTube")
@@ -130,6 +153,17 @@ def cmd_subir(args) -> int:
     if "fb" in plataformas or "facebook" in plataformas:
         try:
             subir_facebook_reel(video_path, descripcion=texto)
+            try:
+                from datetime import timezone
+                from datos.db import guardar_publicacion
+                guardar_publicacion({
+                    "video_id": _deducir_slug(video_path),
+                    "plataforma": "fb_pagina",
+                    "fecha_hora_publicacion": datetime.now(timezone.utc).isoformat(),
+                    "estado": "publico",
+                })
+            except Exception as e:
+                print(f"⚠️ Aviso: No se pudo registrar publicación en SQLite ({e})")
         except Exception as e:
             print(f"❌ Error subiendo a Facebook Reels: {e}")
             errores.append("Facebook")
@@ -140,6 +174,18 @@ def cmd_subir(args) -> int:
             res = subir_reel_perfil(video_path, descripcion=texto, headless=args.headless,
                                     publicar=not args.prueba_fbperfil)
             print(f"FBPERFIL_RESULT status={res['status']} url={res['url']}")
+            try:
+                from datetime import timezone
+                from datos.db import guardar_publicacion
+                guardar_publicacion({
+                    "video_id": _deducir_slug(video_path),
+                    "plataforma": "fb_perfil",
+                    "url": res.get("url"),
+                    "fecha_hora_publicacion": datetime.now(timezone.utc).isoformat(),
+                    "estado": "publico",
+                })
+            except Exception as e:
+                print(f"⚠️ Aviso: No se pudo registrar publicación en SQLite ({e})")
         except FbPerfilBloqueado as e:
             print(f"⛔ Facebook perfil bloqueado (checkpoint/login/2FA): {e}")
             errores.append("Facebook perfil")
@@ -151,6 +197,17 @@ def cmd_subir(args) -> int:
     if "tt" in plataformas or "tiktok" in plataformas:
         try:
             subir_tiktok(video_path, caption=texto, headless=args.headless)
+            try:
+                from datetime import timezone
+                from datos.db import guardar_publicacion
+                guardar_publicacion({
+                    "video_id": _deducir_slug(video_path),
+                    "plataforma": "tiktok",
+                    "fecha_hora_publicacion": datetime.now(timezone.utc).isoformat(),
+                    "estado": "publico",
+                })
+            except Exception as e:
+                print(f"⚠️ Aviso: No se pudo registrar publicación en SQLite ({e})")
         except Exception as e:
             print(f"❌ Error subiendo a TikTok: {e}")
             errores.append("TikTok")

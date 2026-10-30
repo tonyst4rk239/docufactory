@@ -281,6 +281,19 @@ def cmd_revisar(args) -> int:
         formato="16:9",
     )
     print(salida)
+    try:
+        from datos.db import guardar_produccion
+        rev_path = p.ruta("b_roll", "revision.json")
+        if rev_path.exists():
+            rev_datos = json.loads(rev_path.read_text(encoding="utf-8"))
+            rech = [e for e in rev_datos.get("escenas") or [] if e.get("decision") == "rechazada"]
+            guardar_produccion({
+                "video_id": p.datos.get("slug"),
+                "tomas_rechazadas_lente": len(rech),
+                "motivos_rechazo": [e.get("motivo") for e in rech if e.get("motivo")],
+            })
+    except Exception as e:
+        print(f"⚠️ Aviso: no se pudo registrar revisión en SQLite ({e})")
     return 0 if ok else 1
 
 
@@ -328,6 +341,13 @@ def cmd_renderizar(args) -> int:
     # 3. Publicación
     etapa_publicacion(p, duraciones)
 
+    # 4. Registro Analítico en SQLite
+    try:
+        from datos.registrar import registrar_proyecto_completo
+        registrar_proyecto_completo(p, duraciones)
+    except Exception as e:
+        print(f"⚠️ Aviso: no se pudieron registrar métricas en SQLite ({e})")
+
     print("\n" + "=" * 65)
     print("🏆 ¡PRODUCCIÓN DUAL COMPLETADA CON ÉXITO!")
     print(f"🎙️ Stem Voz IA:          {salidas['voz_master']}")
@@ -374,6 +394,13 @@ def cmd_continuar(args) -> int:
     # 6. Publicación
     etapa_publicacion(p, duraciones)
 
+    # 7. Registro Analítico en SQLite
+    try:
+        from datos.registrar import registrar_proyecto_completo
+        registrar_proyecto_completo(p, duraciones)
+    except Exception as e:
+        print(f"⚠️ Aviso: no se pudieron registrar métricas en SQLite ({e})")
+
     print("\n" + "=" * 65)
     print("🏆 ¡PRODUCCIÓN DUAL COMPLETADA CON ÉXITO!")
     print(f"🎙️ Stem Voz IA:          {salidas['voz_master']}")
@@ -406,6 +433,11 @@ def cmd_doblar(args) -> int:
     duraciones = {e.id: dur_esc for e in g.escenas}
 
     salidas = etapa_render(p, duraciones, voz_humana=audio_humano, sin_normalizar_brillo=getattr(args, 'sin_normalizar_brillo', False))
+    try:
+        from datos.registrar import registrar_proyecto_completo
+        registrar_proyecto_completo(p, duraciones)
+    except Exception as e:
+        print(f"⚠️ Aviso: no se pudieron registrar métricas en SQLite ({e})")
     print("\n" + "=" * 65)
     print("🎉 ¡VIDEO RE-SINCRONIZADO CON VOZ HUMANA!")
     print(f"📹 Video Final: {salidas['video_con_voz']}")
