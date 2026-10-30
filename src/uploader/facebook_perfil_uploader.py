@@ -22,6 +22,9 @@ LOGS_DIR = RAIZ / "logs" / "fb_perfil"
 URL_CREAR = "https://www.facebook.com/reels/create/"
 ARGS_NAVEGADOR = ["--disable-blink-features=AutomationControlled"]
 SUBIDA_TIMEOUT_S = 600
+ATASCO_0_TIMEOUT_S = 90   # si sigue en "Subiendo 0%" tanto tiempo, se reintenta la carga
+INTENTOS_CARGA = 4
+_HOSTS_SUBIDA = ("vupload", "rupload", "upload.facebook.com")
 CONFIRMACION_TIMEOUT_S = 240
 
 _MARCAS_BLOQUEO = ("checkpoint", "two_step_verification", "/login", "login.php", "recover", "captcha")
@@ -147,18 +150,66 @@ def _escribir_descripcion(page, descripcion: str) -> None:
         print(f"   ⚠️ La descripción escrita difiere de la original ({len(escrito)} vs {len(descripcion.strip())} caracteres)")
 
 
-def _esperar_subida(page) -> None:
-    preview = page.locator("[aria-label='Vista previa de la publicación']").first
+class SubidaAtascada(RuntimeError):
+    """La subida no pasó de 0% (las peticiones a vupload/rupload fallan)."""
+
+
+def _texto_preview(page) -> str:
+    try:
+        return page.locator("[aria-label='Vista previa de la publicación']").first.inner_text(timeout=5000)
+    except Exception:
+        return ""
+
+
+def _esperar_subida(page, fallos: list | None = None) -> None:
+    """Espera a que termine la subida. Si se queda en 0% más de ATASCO_0_TIMEOUT_S, lanza SubidaAtascada."""
     inicio = time.time()
     while time.time() - inicio < SUBIDA_TIMEOUT_S:
-        try:
-            t = preview.inner_text(timeout=5000)
-        except Exception:
-            t = ""
+        t = _texto_preview(page)
         if t and "Subiendo" not in t and "Uploading" not in t and "Procesando" not in t:
             return
+        en_cero = (not t) or "Subiendo 0%" in t or "Uploading 0%" in t
+        if en_cero and time.time() - inicio > ATASCO_0_TIMEOUT_S:
+            detalle = f" ({len(fallos)} peticiones de subida fallidas, p.ej. {fallos[-1]})" if fallos else ""
+            raise SubidaAtascada("La subida sigue en 0%" + detalle)
         time.sleep(3)
     raise RuntimeError("El video no terminó de subirse a Facebook (sigue en 'Subiendo').")
+
+
+def _cargar_video(page, path: Path) -> None:
+    """Abre 'Crear reel', adjunta el video y espera la subida; reintenta con la página recargada
+    si las peticiones a vupload-edge/rupload fallan (net::ERR_FAILED) y la subida se atasca en 0%.
+    Esos fallos de red son intermitentes: en una página nueva la subida suele pasar."""
+    fallos: list[str] = []
+
+    def _fallo(req):
+        if any(h in req.url for h in _HOSTS_SUBIDA):
+            fallos.append(f"{req.url.split('?')[0][:80]} {req.failure}")
+
+    page.on("requestfailed", _fallo)
+    try:
+        for intento in range(1, INTENTOS_CARGA + 1):
+            fallos.clear()
+            print(f"   🌐 Abriendo 'Crear reel' (intento {intento}/{INTENTOS_CARGA})...")
+            page.goto(URL_CREAR, wait_until="domcontentloaded", timeout=60000)
+            time.sleep(6)
+            _revisar_bloqueo(page)
+            print("   📁 Cargando video...")
+            page.locator("input[type='file']").first.set_input_files(str(path))
+            print("   ⏳ Esperando a que Facebook termine de recibir el video...")
+            time.sleep(5)
+            try:
+                _esperar_subida(page, fallos)
+                print("   ✅ Video recibido por Facebook")
+                return
+            except SubidaAtascada as e:
+                _captura(page, f"atasco_intento{intento}")
+                print(f"   ⚠️ {e}. Reintentando en una página nueva...")
+                time.sleep(15 * intento)
+        raise RuntimeError(f"La subida se quedó en 'Subiendo 0%' en {INTENTOS_CARGA} intentos "
+                           f"(fallan las peticiones a vupload/rupload de Facebook).")
+    finally:
+        page.remove_listener("requestfailed", _fallo)
 
 
 def _boton(page, nombre: str):
@@ -243,16 +294,7 @@ def subir_reel_perfil(video_path: Path | str, descripcion: str, headless: bool =
     with sync_playwright() as p:
         ctx, page = _sesion(p, headless)
         try:
-            print("   🌐 Abriendo 'Crear reel'...")
-            page.goto(URL_CREAR, wait_until="domcontentloaded", timeout=60000)
-            time.sleep(6)
-            _revisar_bloqueo(page)
-
-            print("   📁 Cargando video...")
-            page.locator("input[type='file']").first.set_input_files(str(path))
-            print("   ⏳ Esperando a que Facebook termine de recibir el video...")
-            time.sleep(5)
-            _esperar_subida(page)
+            _cargar_video(page, path)
             print("   ✍️ Escribiendo descripción...")
             _escribir_descripcion(page, descripcion)
 
