@@ -44,3 +44,8 @@ logs/
 datos/*.db
 datos/*.sqlite
 datos/docufactory.db
+
+# Artefactos de compilación C++
+kdrama_scraper/bin/
+*.obj
+*.exe
