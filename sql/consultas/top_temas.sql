@@ -1,15 +1,16 @@
 -- top_temas.sql
--- Temas ordenados por retención media con un mínimo de vistas (evita ruido con pocas vistas).
+-- Temas ordenados por retención media ponderada por vistas (con mínimo de vistas para evitar ruido).
 -- Incluye n_videos y bandera muestra_chica (< 3 videos o < 500 vistas).
 
 SELECT
-    COALESCE(v.tema, 'Sin Tema') AS tema,
+    COALESCE(v.tema, 'otro') AS tema,
     v.canal,
     COUNT(DISTINCT v.video_id) AS n_videos,
     SUM(m.vistas) AS total_vistas,
     ROUND(AVG(m.vistas), 2) AS promedio_vistas,
     ROUND(SUM(m.minutos_vistos) / 60.0, 2) AS total_horas,
-    ROUND(AVG(m.pct_visto_medio), 2) AS retencion_media,
+    ROUND(SUM(m.pct_visto_medio * m.vistas) / NULLIF(SUM(m.vistas), 0), 2) AS retencion_media,
+    ROUND(SUM(m.duracion_media_s * m.vistas) / NULLIF(SUM(m.vistas), 0), 2) AS duracion_media_s,
     CASE
         WHEN COUNT(DISTINCT v.video_id) < 3 OR COALESCE(SUM(m.vistas), 0) < 500 THEN 1
         ELSE 0

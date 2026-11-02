@@ -1,30 +1,126 @@
 """Recolector de metricas para YouTube: Codigo OcultoTV y Novelas Express MX.
 
 Extrae informacion de YouTube Data API v3 y YouTube Analytics API v2
-usando OAuth token existente, infiere formatos de video, aplica correcciones
-manuales desde CSV y realiza upserts idempotentes en SQLite.
+usando OAuth token correspondiente por canal, infiere formatos de video con reglas
+estrictas, clasifica temas por diccionario de categorias, convierte horas a America/Merida,
+aplica correcciones manuales desde CSV y realiza upserts idempotentes en SQLite.
 """
 from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
+import json
 from pathlib import Path
 import re
 import sqlite3
 import sys
 from typing import Any, Optional
+import wave
+
+try:
+    from zoneinfo import ZoneInfo
+    TZ_MERIDA = ZoneInfo("America/Merida")
+except Exception:
+    # Merida es UTC-6 fijo
+    TZ_MERIDA = timezone(timedelta(hours=-6))
 
 RAIZ = Path(__file__).resolve().parent.parent.parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
-TOKEN_YOUTUBE = RAIZ / "assets" / "credentials" / "token_youtube.json"
+TOKEN_CODIGO = RAIZ / "assets" / "credentials" / "token_youtube.json"
+TOKEN_NOVELAS = RAIZ / "assets" / "credentials" / "token_youtube_novelas.json"
 SCHEMA_DEFAULT = RAIZ / "sql" / "schema.sql"
 DB_DEFAULT = RAIZ / "data" / "metricas.db"
 CSV_ETIQUETAS_DEFAULT = RAIZ / "data" / "etiquetas_videos.csv"
 
+NOVELAS_CHANNEL_ID = "UC8O5Zv0nsHRfaXij9uJNYbg"
+
+MAPA_CANAL_TOKEN = {
+    "Código OcultoTV": TOKEN_CODIGO,
+    "Codigo OcultoTV": TOKEN_CODIGO,
+    "Novelas Express MX": TOKEN_NOVELAS,
+    "Novelas Express": TOKEN_NOVELAS,
+}
+
 FORMATOS_VALIDOS = {"short", "largo_original", "recopilacion", "novela_cap"}
+
+CATEGORIAS_TEMAS = [
+    "novela",
+    "crimen",
+    "paranormal",
+    "leyenda",
+    "religión",
+    "reality",
+    "historia",
+]
+
+DICCIONARIO_TEMAS_REGEX = {
+    "novela": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bnovela\b", r"\bkdrama\b", r"\bdorama\b", r"\bcap[ií]tulo\b", r"\bcap\.?\b",
+            r"\bepisodio\b", r"\btelenovela\b", r"\bserie\b", r"\bromance\b"
+        ]
+    ],
+    "crimen": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bcrimen\b", r"\basesin\w*", r"\bhomicid\w*", r"\bnarco\w*", r"\bc[aá]rtel\b",
+            r"\bprisi[oó]n\b", r"\bc[aá]rcel\b", r"\brobo\b", r"\bpolic[ií]a\b", r"\bdelito\b",
+            r"\bjuicio\b", r"\bforense\b", r"\bcondena\b", r"\bdesaparici[oó]n\b", r"\bsecuestr\w*",
+            r"\bculpable\b", r"\binocente\b"
+        ]
+    ],
+    "paranormal": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bparanormal\b", r"\bfantasma\w*", r"\bovni\b", r"\bufo\b", r"\bextraterrestre\w*",
+            r"\balien\w*", r"\bdemonio\w*", r"\bposesi[oó]n\b", r"\bexorcismo\b", r"\bmisterio\w*",
+            r"\baparici[oó]n\b", r"\bente\b", r"\bouija\b", r"\bterror\b", r"\bespectro\b",
+            r"\bpoltergeist\b", r"\benigma\w*"
+        ]
+    ],
+    "leyenda": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bleyenda\w*", r"\bmito\w*", r"\bfolclor\w*", r"\bcriptozoolog[ií]a\b", r"\bnahual\w*",
+            r"\bchupacabras\b", r"\bmonstruo\w*", r"\bmaldici[oó]n\b", r"\burbana\b", r"\bla llorona\b"
+        ]
+    ],
+    "religión": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\breligi[oó]n\b", r"\bbiblia\b", r"\bb[ií]blico\w*", r"\bdios\b", r"\biglesia\b",
+            r"\bvaticano\b", r"\bpapa\b", r"\bsanto\w*", r"\bapocalipsis\b", r"\bprofec[ií]a\w*",
+            r"\bmilagro\w*", r"\bjes[uú]s\b", r"\bcristo\b", r"\bfe\b", r"\bsagradas?\b"
+        ]
+    ],
+    "reality": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\breality\b", r"\bacapulco shore\b", r"\bcasa de los famosos\b", r"\bpol[eé]mica\b",
+            r"\besc[aá]ndalo\b", r"\bpelea\b", r"\binfluencer\w*", r"\bchisme\w*", r"\bfar[aá]ndula\b",
+            r"\bdesplante\b", r"\ben vivo\b", r"\bconcierto\b", r"\bviral\b"
+        ]
+    ],
+    "historia": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bhistoria\w*", r"\bhist[oó]rico\w*", r"\bguerra\w*", r"\bimperio\w*", r"\brevoluci[oó]n\b",
+            r"\bsiglo\b", r"\barqueolog[ií]a\b", r"\bantiguo\w*", r"\bmaya\w*", r"\begipto\b",
+            r"\bcivilizaci[oó]n\b", r"\bcomputaci[oó]n\b", r"\binvento\w*", r"\btransistor\b",
+            r"\btecnolog[ií]a\b", r"\bciencia\b"
+        ]
+    ],
+}
+
+
+def _custom_strftime(fmt: str, val: Any) -> Optional[str]:
+    """Soporte nativo de semanas ISO (%G-%V) y formatos estandar en SQLite."""
+    if not val:
+        return None
+    try:
+        s = str(val)[:10]
+        dt = date.fromisoformat(s)
+        return dt.strftime(fmt)
+    except Exception:
+        return None
 
 
 def iso_duracion_a_s(duracion_iso: str) -> float:
@@ -41,6 +137,119 @@ def iso_duracion_a_s(duracion_iso: str) -> float:
     return float(h * 3600 + mins * 60 + secs)
 
 
+def convertir_a_merida(iso_utc_str: str) -> tuple[Optional[str], Optional[str]]:
+    """Convierte una marca temporal ISO UTC (publishedAt) a fecha y hora en America/Merida."""
+    if not iso_utc_str:
+        return None, None
+    try:
+        s = iso_utc_str.replace("Z", "+00:00")
+        dt_utc = datetime.fromisoformat(s)
+        dt_merida = dt_utc.astimezone(TZ_MERIDA)
+        return dt_merida.strftime("%Y-%m-%d"), dt_merida.strftime("%H:%M:%S")
+    except Exception:
+        return iso_utc_str[:10], iso_utc_str[11:19] if len(iso_utc_str) > 18 else None
+
+
+def clasificar_tema(titulo: str, canal: str = "", tema_csv: str = "") -> str:
+    """Asigna la categoría del tema según CSV o diccionario de palabras clave.
+
+    Nunca retorna el título. Categorías: leyenda, paranormal, religión, crimen, reality, historia, novela.
+    """
+    if tema_csv and tema_csv.strip():
+        return tema_csv.strip()
+
+    c_lower = (canal or "").lower()
+    t_lower = (titulo or "").lower()
+
+    if "novela" in c_lower:
+        return "novela"
+
+    for cat in ("novela", "crimen", "paranormal", "leyenda", "religión", "reality", "historia"):
+        for reg in DICCIONARIO_TEMAS_REGEX[cat]:
+            if reg.search(t_lower):
+                return cat
+
+    return "novela" if "novela" in c_lower else "otro"
+
+
+def inferir_formato_y_metadatos(
+    titulo: str,
+    duracion_s: float,
+    canal: str = "",
+    es_vertical: bool = False,
+    formato_csv: str = "",
+    tema_csv: str = "",
+    serie_csv: str = "",
+    capitulo_csv: Optional[int] = None,
+) -> dict[str, Any]:
+    """Infiere formato, tema, serie y capitulo con reglas estrictas:
+
+    - short: duracion <= 180 s o es vertical (aspecto 9:16 o #shorts).
+    - recopilacion: SOLO desde CSV o si el titulo trae exactamente '[Recopilación]' (nunca por 'Top N').
+    - novela_cap: SOLO en el canal de Novelas.
+    - largo_original: resto de videos.
+    - tema: desde CSV o clasificador tematico por diccionario, nunca el titulo.
+    """
+    t_lower = (titulo or "").lower()
+    c_lower = (canal or "").lower()
+    es_canal_novela = "novela" in c_lower
+
+    # 1. Recopilación: ÚNICAMENTE si viene en CSV o trae etiqueta explícita [Recopilación]
+    tiene_tag_recopilacion = bool(re.search(r"\[recopilaci[oó]n\]", titulo or "", re.IGNORECASE))
+    if formato_csv == "recopilacion" or tiene_tag_recopilacion:
+        formato = "recopilacion"
+        tema = clasificar_tema(titulo, canal, tema_csv)
+        return {
+            "formato": formato,
+            "tema": tema,
+            "serie": serie_csv or None,
+            "capitulo": capitulo_csv,
+        }
+
+    # 2. Short: duracion <= 180s o vertical
+    tiene_hashtag_short = bool(re.search(r"#shorts?\b", t_lower))
+    if (duracion_s > 0 and duracion_s <= 180.0) or es_vertical or tiene_hashtag_short:
+        formato = "short"
+        tema = clasificar_tema(titulo, canal, tema_csv)
+        return {
+            "formato": formato,
+            "tema": tema,
+            "serie": serie_csv or None,
+            "capitulo": capitulo_csv,
+        }
+
+    # 3. Novela Cap: SOLO en el canal de Novelas
+    if es_canal_novela:
+        formato = "novela_cap"
+        tema = clasificar_tema(titulo, canal, tema_csv)
+        patron_cap = re.search(r"\b(?:cap[ií]tulo|cap\.?|ep(?:isodio)?\.?)\s*(\d+)", titulo, re.IGNORECASE)
+        cap = capitulo_csv if capitulo_csv is not None else (int(patron_cap.group(1)) if patron_cap else None)
+        serie = serie_csv
+        if not serie:
+            partes = re.split(r"[:\|\-\–\—]", titulo)
+            serie = partes[0].strip() if len(partes) > 1 else None
+            if not serie and patron_cap:
+                serie = titulo[:patron_cap.start()].strip(" -|:,\t")
+            if not serie:
+                serie = "Novelas Express"
+        return {
+            "formato": formato,
+            "tema": tema,
+            "serie": serie,
+            "capitulo": cap,
+        }
+
+    # 4. Largo original por defecto
+    formato = formato_csv if formato_csv in FORMATOS_VALIDOS else "largo_original"
+    tema = clasificar_tema(titulo, canal, tema_csv)
+    return {
+        "formato": formato,
+        "tema": tema,
+        "serie": serie_csv or None,
+        "capitulo": capitulo_csv,
+    }
+
+
 def inicializar_db(db_path: Path = DB_DEFAULT, schema_path: Path = SCHEMA_DEFAULT) -> sqlite3.Connection:
     """Crea la base de datos y sus tablas si no existen."""
     db_path = Path(db_path)
@@ -48,81 +257,11 @@ def inicializar_db(db_path: Path = DB_DEFAULT, schema_path: Path = SCHEMA_DEFAUL
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON;")
+    con.create_function("strftime", 2, _custom_strftime)
     if Path(schema_path).exists():
         sql = Path(schema_path).read_text(encoding="utf-8")
         con.executescript(sql)
     return con
-
-
-def inferir_formato_y_metadatos(titulo: str, duracion_s: float, canal: str = "") -> dict[str, Any]:
-    """Infiere formato, tema, serie y capitulo a partir de duracion, titulo y canal.
-
-    Formatos validos: 'short', 'largo_original', 'recopilacion', 'novela_cap'.
-    """
-    t_lower = (titulo or "").lower()
-    c_lower = (canal or "").lower()
-
-    # 1. Shorts: duracion <= 60s o indicacion explicita de #shorts
-    if (duracion_s > 0 and duracion_s <= 60.0) or ("#shorts" in t_lower or "#short" in t_lower or " #shorts" in t_lower):
-        return {
-            "formato": "short",
-            "tema": _limpiar_tema(titulo),
-            "serie": None,
-            "capitulo": None,
-        }
-
-    # 2. Novela / Capitulo: si el canal es de novelas o el titulo trae capitulo/episodio
-    patron_cap = re.search(r"\b(?:cap[ií]tulo|cap\.?|ep(?:isodio)?\.?)\s*(\d+)", titulo, re.IGNORECASE)
-    es_canal_novela = "novela" in c_lower or "kdrama" in c_lower or "drama" in c_lower
-    tiene_palabra_novela = "novela" in t_lower or "kdrama" in t_lower or "dorama" in t_lower
-
-    if patron_cap or es_canal_novela or tiene_palabra_novela:
-        capitulo = int(patron_cap.group(1)) if patron_cap else None
-        # Intentar extraer serie (antes de separadores | o - o antes de 'Capitulo')
-        partes = re.split(r"[:\|\-\–\—]", titulo)
-        serie = partes[0].strip() if len(partes) > 1 else None
-        if not serie and patron_cap:
-            serie = titulo[:patron_cap.start()].strip(" -|:,\t")
-        if not serie:
-            serie = "Novelas Express" if es_canal_novela else "Serie Original"
-
-        return {
-            "formato": "novela_cap",
-            "tema": serie,
-            "serie": serie,
-            "capitulo": capitulo,
-        }
-
-    # 3. Recopilaciones / Maratones / Tops
-    indicadores_recopilacion = (
-        "recopilacion", "recopilación", "compilacion", "compilación",
-        "maraton", "maratón", "episodios completos", "historias completas",
-        "todos los casos", "todas las partes"
-    )
-    es_recop = any(k in t_lower for k in indicadores_recopilacion) or bool(re.search(r"\btop\s*\d+\b", t_lower))
-    if es_recop:
-        return {
-            "formato": "recopilacion",
-            "tema": _limpiar_tema(titulo),
-            "serie": None,
-            "capitulo": None,
-        }
-
-    # 4. Largo original por defecto
-    return {
-        "formato": "largo_original",
-        "tema": _limpiar_tema(titulo),
-        "serie": None,
-        "capitulo": None,
-    }
-
-
-def _limpiar_tema(titulo: str) -> str:
-    """Extrae un tema conciso removiendo etiquetas comunes y separadores."""
-    t = re.sub(r"#\w+", "", titulo or "")
-    partes = re.split(r"[:\|\-\–\—]", t)
-    tema = partes[0].strip() if partes else t.strip()
-    return tema or "General"
 
 
 def cargar_etiquetas_csv(csv_path: Path = CSV_ETIQUETAS_DEFAULT) -> dict[str, dict[str, Any]]:
@@ -206,7 +345,7 @@ def upsert_video(con: sqlite3.Connection, video: dict[str, Any]) -> None:
 
 
 def upsert_metrica_diaria(con: sqlite3.Connection, metrica: dict[str, Any]) -> None:
-    """Inserta o actualiza metricas diarias por video y fecha."""
+    """Inserta o actualiza metricas diarias reales (nunca datos inventados)."""
     sql = """
     INSERT INTO metricas_diarias (
         video_id, fecha, vistas, minutos_vistos, duracion_media_s,
@@ -279,79 +418,217 @@ def upsert_trafico(con: sqlite3.Connection, traficos: list[dict[str, Any]]) -> N
     ])
 
 
+def upsert_escenas(con: sqlite3.Connection, video_id: str, lista_escenas: list[dict[str, Any]]) -> None:
+    """Inserta o actualiza las escenas con tiempos para cruzarlas con la curva de retención."""
+    if not lista_escenas:
+        return
+    sql = """
+    INSERT INTO escenas (video_id, n_escena, inicio_s, fin_s, texto, broll_fuente)
+    VALUES (:video_id, :n_escena, :inicio_s, :fin_s, :texto, :broll_fuente)
+    ON CONFLICT(video_id, n_escena) DO UPDATE SET
+        inicio_s = excluded.inicio_s,
+        fin_s = excluded.fin_s,
+        texto = excluded.texto,
+        broll_fuente = excluded.broll_fuente;
+    """
+    con.executemany(sql, [
+        {
+            "video_id": video_id,
+            "n_escena": int(e.get("n_escena", 1)),
+            "inicio_s": round(float(e.get("inicio_s", 0.0)), 2),
+            "fin_s": round(float(e.get("fin_s", 0.0)), 2),
+            "texto": e.get("texto") or "",
+            "broll_fuente": e.get("broll_fuente") or "",
+        }
+        for e in lista_escenas
+    ])
+
+
+def vincular_escenas_locales(con: sqlite3.Connection, dir_proyectos: Path = RAIZ / "proyectos") -> int:
+    """Inspecciona proyectos locales y vincula su cronología con los videos en la base."""
+    dir_proyectos = Path(dir_proyectos)
+    if not dir_proyectos.exists():
+        return 0
+
+    cur = con.execute("SELECT video_id, titulo FROM videos")
+    videos_bd = [dict(r) for r in cur.fetchall()]
+    if not videos_bd:
+        return 0
+
+    total_escenas = 0
+
+    for carpeta in dir_proyectos.iterdir():
+        if not carpeta.is_dir():
+            continue
+        guion_path = carpeta / "guion" / "guion.json"
+        if not guion_path.exists():
+            continue
+
+        try:
+            g_data = json.loads(guion_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        titulo_trabajo = g_data.get("titulo_trabajo") or carpeta.name.replace("video_", "").replace("_", " ")
+
+        mejor_vid = None
+        mejor_score = 0.0
+        for v in videos_bd:
+            sc = SequenceMatcher(None, titulo_trabajo.lower(), v["titulo"].lower()).ratio()
+            if carpeta.name.replace("video_", "").lower() in v["titulo"].lower():
+                sc = max(sc, 0.9)
+            if sc > mejor_score:
+                mejor_score = sc
+                mejor_vid = v["video_id"]
+
+        if not mejor_vid or mejor_score < 0.5:
+            continue
+
+        escenas_raw = g_data.get("escenas", [])
+        lista_a_guardar = []
+        t_acum = 0.0
+        dir_voz = carpeta / "voz"
+
+        for idx, esc in enumerate(escenas_raw, start=1):
+            n_esc = esc.get("id") or idx
+            dur_esc = 0.0
+            wav_candidatos = [
+                dir_voz / f"escena_{n_esc:03d}.wav",
+                dir_voz / f"escena_{n_esc}.wav",
+            ]
+            for wc in wav_candidatos:
+                if wc.exists():
+                    try:
+                        with wave.open(str(wc), "rb") as wf:
+                            dur_esc = wf.getnframes() / float(wf.getframerate())
+                        break
+                    except Exception:
+                        pass
+
+            if dur_esc <= 0.0:
+                palabras = len((esc.get("voz") or "").split())
+                dur_esc = max(2.5, palabras / 2.5)
+
+            t_inicio = t_acum
+            t_fin = t_acum + dur_esc
+            t_acum = t_fin
+
+            texto = esc.get("voz") or esc.get("texto_pantalla") or ""
+            broll = esc.get("broll_query_en") or esc.get("broll_descripcion") or esc.get("broll") or ""
+
+            lista_a_guardar.append({
+                "n_escena": n_esc,
+                "inicio_s": t_inicio,
+                "fin_s": t_fin,
+                "texto": texto,
+                "broll_fuente": broll,
+            })
+
+        if lista_a_guardar:
+            upsert_escenas(con, mejor_vid, lista_a_guardar)
+            total_escenas += len(lista_a_guardar)
+
+    return total_escenas
+
+
 # ---------------------------------------------------------------------------
-# Conexión con YouTube API (Data v3 + Analytics v2)
+# Conexión Multi-canal y Verificación de Channel ID
 # ---------------------------------------------------------------------------
 
-def obtener_servicios_youtube(token_path: Path = TOKEN_YOUTUBE):
-    """Inicializa servicios de YouTube Data y Analytics sin exponer secretos."""
-    token_path = Path(token_path)
-    if not token_path.exists():
-        print(f"[AVISO] No se encontró {token_path}. Ejecuta: python subir_video.py auth-youtube")
-        return None, None
+def resolver_token(canal: str, token_cli: Optional[Path] = None) -> Path:
+    if token_cli:
+        return Path(token_cli)
+    for k, v in MAPA_CANAL_TOKEN.items():
+        if k.lower() in (canal or "").lower() or (canal or "").lower() in k.lower():
+            return v
+    return TOKEN_CODIGO
+
+
+def obtener_servicios_youtube(canal: str = "Código OcultoTV", token_path: Optional[Path] = None):
+    """Inicializa servicios de YouTube y valida estrictamente el Channel ID."""
+    token_file = resolver_token(canal, token_path)
+    if not token_file.exists():
+        raise FileNotFoundError(
+            f"No existe el archivo de token para el canal '{canal}': {token_file}\n"
+            f"Ejecuta: python src/metricas/autorizar_canal.py --canal '{canal}'"
+        )
 
     try:
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
     except ImportError:
-        print("[ERROR] Bibliotecas de Google API no instaladas.")
-        return None, None
+        raise ImportError("Bibliotecas google-api-python-client y google-auth-oauthlib no instaladas.")
 
-    try:
-        creds = Credentials.from_authorized_user_file(str(token_path))
-        if not creds.valid:
-            if creds.expired and creds.refresh_token:
-                try:
-                    creds.refresh(Request())
-                except Exception as e:
-                    print(f"[AVISO] No se pudo refrescar el token ({type(e).__name__}). Re-autentica.")
-                    return None, None
-            else:
-                print("[AVISO] Credenciales de YouTube no válidas.")
-                return None, None
+    creds = Credentials.from_authorized_user_file(str(token_file))
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            token_file.write_text(creds.to_json(), encoding="utf-8")
+        else:
+            raise RuntimeError(f"El token {token_file.name} no es válido ni renovable. Re-autoriza el canal.")
 
-        yt_data = build("youtube", "v3", credentials=creds, cache_discovery=False)
-        yt_analytics = build("youtubeAnalytics", "v2", credentials=creds, cache_discovery=False)
-        return yt_data, yt_analytics
-    except Exception as e:
-        print(f"[AVISO] Error al conectar con APIs de YouTube: {type(e).__name__}")
-        return None, None
+    yt_data = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    yt_analytics = build("youtubeAnalytics", "v2", credentials=creds, cache_discovery=False)
 
+    # Verificación de identidad del canal
+    ch_resp = yt_data.channels().list(part="id,snippet,contentDetails", mine=True).execute()
+    items = ch_resp.get("items", [])
+    if not items:
+        raise RuntimeError(f"No se encontró ningún canal en la cuenta asociada a {token_file.name}.")
+
+    ch_actual = items[0]
+    actual_id = ch_actual["id"]
+    actual_title = ch_actual["snippet"]["title"]
+
+    # Si es Novelas Express MX, validar obligatoriamente su channel ID
+    if "novela" in (canal or "").lower():
+        if actual_id != NOVELAS_CHANNEL_ID:
+            raise RuntimeError(
+                f"Error de verificación de canal: el token autenticado ({token_file.name}) "
+                f"corresponde al canal '{actual_title}' (ID: {actual_id}), "
+                f"pero se esperaba estrictamente Novelas Express MX (ID: {NOVELAS_CHANNEL_ID})."
+            )
+
+    return yt_data, yt_analytics, ch_actual
+
+
+# ---------------------------------------------------------------------------
+# Cosecha de Datos con YouTube Analytics (Sin datos inventados)
+# ---------------------------------------------------------------------------
 
 def recolectar_desde_youtube(
     con: sqlite3.Connection,
     canal_filtro: Optional[str] = None,
     desde_fecha: Optional[str] = None,
+    token_path: Optional[Path] = None,
     csv_etiquetas_path: Path = CSV_ETIQUETAS_DEFAULT,
-) -> dict[str, int]:
-    """Cosecha videos, métricas diarias, retención y tráfico desde YouTube."""
+) -> tuple[dict[str, int], list[str]]:
+    """Cosecha videos y métricas reales desde YouTube.
+
+    Retorna (estadísticas, lista_de_errores). Si falla Analytics, no inventa datos.
+    """
     stats = {"videos": 0, "metricas": 0, "retencion": 0, "trafico": 0}
+    errores: list[str] = []
 
-    yt_data, yt_analytics = obtener_servicios_youtube()
-    if yt_data is None:
-        return stats
+    canal_objetivo = canal_filtro or "Código OcultoTV"
 
+    try:
+        yt_data, yt_analytics, canal_info = obtener_servicios_youtube(canal=canal_objetivo, token_path=token_path)
+    except Exception as e:
+        errores.append(f"Error crítico de autenticación/verificación para '{canal_objetivo}': {e}")
+        return stats, errores
+
+    canal_nombre = canal_info["snippet"]["title"]
+    uploads_id = canal_info["contentDetails"]["relatedPlaylists"]["uploads"]
     etiquetas_csv = cargar_etiquetas_csv(csv_etiquetas_path)
 
-    # Determinar rango de fechas
     hoy_str = date.today().isoformat()
     if not desde_fecha:
         desde_fecha = (date.today() - timedelta(days=3)).isoformat()
 
     try:
-        # Obtener canal autenticado
-        ch_resp = yt_data.channels().list(part="snippet,contentDetails", mine=True).execute()
-        items = ch_resp.get("items", [])
-        if not items:
-            print("[AVISO] No se encontraron canales en la cuenta.")
-            return stats
-
-        canal_item = items[0]
-        canal_nombre = canal_filtro or canal_item["snippet"]["title"]
-        uploads_id = canal_item["contentDetails"]["relatedPlaylists"]["uploads"]
-
-        # Recorrer videos subidos
+        # Obtener lista de videos subidos
         video_ids = []
         token_pag = None
         while True:
@@ -366,7 +643,7 @@ def recolectar_desde_youtube(
             if not token_pag:
                 break
 
-        # Obtener detalles de videos en bloques de 50
+        # Detalles por bloques de 50
         for i in range(0, len(video_ids), 50):
             chunk = video_ids[i:i + 50]
             v_resp = yt_data.videos().list(
@@ -378,141 +655,114 @@ def recolectar_desde_youtube(
                 vid = item["id"]
                 snip = item["snippet"]
                 cnt = item["contentDetails"]
-                stat = item.get("statistics", {})
 
                 titulo = snip.get("title", "")
                 pub_at = snip.get("publishedAt", "")
-                fecha_pub = pub_at[:10] if pub_at else None
-                hora_pub = pub_at[11:19] if len(pub_at) > 18 else None
+                fecha_pub, hora_pub = convertir_a_merida(pub_at)
                 dur_s = iso_duracion_a_s(cnt.get("duration", ""))
 
-                # Inferencia de formato y metadatos
-                meta = inferir_formato_y_metadatos(titulo, dur_s, canal=canal_nombre)
+                # Leer etiquetas manuales previas si existen
+                csv_item = etiquetas_csv.get(vid, {})
+
+                # Inferencia con reglas estrictas
+                meta = inferir_formato_y_metadatos(
+                    titulo=titulo,
+                    duracion_s=dur_s,
+                    canal=canal_nombre,
+                    es_vertical=False,
+                    formato_csv=csv_item.get("formato", ""),
+                    tema_csv=csv_item.get("tema", ""),
+                    serie_csv=csv_item.get("serie", ""),
+                    capitulo_csv=csv_item.get("capitulo"),
+                )
                 meta["video_id"] = vid
                 meta["canal"] = canal_nombre
                 meta["titulo"] = titulo
                 meta["duracion_s"] = dur_s
                 meta["fecha_publicacion"] = fecha_pub
                 meta["hora_publicacion"] = hora_pub
-                meta["voz"] = None
-                meta["estilo_visual"] = None
+                meta["voz"] = csv_item.get("voz")
+                meta["estilo_visual"] = csv_item.get("estilo_visual")
 
-                # Aplicar sobreescrituras de CSV si existen
-                meta = aplicar_etiquetas_manuales(meta, etiquetas_csv)
-
-                # Upsert video
                 upsert_video(con, meta)
                 stats["videos"] += 1
 
-                # Métricas snapshot actuales
-                vistas_tot = int(stat.get("viewCount", 0))
-                likes_tot = int(stat.get("likeCount", 0))
-                com_tot = int(stat.get("commentCount", 0))
+                # Consulta obligatoria a YouTube Analytics API
+                try:
+                    rep = yt_analytics.reports().query(
+                        ids="channel==MINE",
+                        startDate=desde_fecha,
+                        endDate=hoy_str,
+                        metrics="views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,subscribersGained",
+                        dimensions="day",
+                        filters=f"video=={vid}",
+                    ).execute()
 
-                # Si tenemos YouTube Analytics API, consultar día a día
-                if yt_analytics:
-                    try:
-                        rep = yt_analytics.reports().query(
-                            ids="channel==MINE",
-                            startDate=desde_fecha,
-                            endDate=hoy_str,
-                            metrics="views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,subscribersGained",
-                            dimensions="day",
-                            filters=f"video=={vid}",
-                        ).execute()
-
-                        rows = rep.get("rows", [])
-                        for row in rows:
-                            f_dia = str(row[0])
-                            upsert_metrica_diaria(con, {
-                                "video_id": vid,
-                                "fecha": f_dia,
-                                "vistas": int(row[1] or 0),
-                                "minutos_vistos": float(row[2] or 0.0),
-                                "duracion_media_s": float(row[3] or 0.0),
-                                "pct_visto_medio": float(row[4] or 0.0),
-                                "likes": int(row[5] or 0),
-                                "comentarios": int(row[6] or 0),
-                                "suscriptores_ganados": int(row[7] or 0),
-                            })
-                            stats["metricas"] += 1
-                    except Exception:
-                        # Fallback a métrica de hoy con snapshot general si analytics falla
+                    rows = rep.get("rows", [])
+                    for row in rows:
                         upsert_metrica_diaria(con, {
                             "video_id": vid,
-                            "fecha": hoy_str,
-                            "vistas": vistas_tot,
-                            "minutos_vistos": round((vistas_tot * dur_s * 0.4) / 60.0, 2),
-                            "duracion_media_s": round(dur_s * 0.4, 2),
-                            "pct_visto_medio": 40.0,
-                            "likes": likes_tot,
-                            "comentarios": com_tot,
-                            "suscriptores_ganados": 0,
+                            "fecha": str(row[0]),
+                            "vistas": int(row[1] or 0),
+                            "minutos_vistos": float(row[2] or 0.0),
+                            "duracion_media_s": float(row[3] or 0.0),
+                            "pct_visto_medio": float(row[4] or 0.0),
+                            "likes": int(row[5] or 0),
+                            "comentarios": int(row[6] or 0),
+                            "suscriptores_ganados": int(row[7] or 0),
                         })
                         stats["metricas"] += 1
+                except Exception as e_an:
+                    errores.append(f"Video {vid} ('{titulo}'): fallo al obtener métricas diarias de Analytics: {e_an}")
 
-                    # Tráfico por video
-                    try:
-                        rep_traf = yt_analytics.reports().query(
-                            ids="channel==MINE",
-                            startDate=desde_fecha,
-                            endDate=hoy_str,
-                            metrics="views",
-                            dimensions="day,insightTrafficSourceType",
-                            filters=f"video=={vid}",
-                        ).execute()
-                        traf_puntos = [
-                            {"video_id": vid, "fecha": str(r[0]), "fuente": str(r[1]), "vistas": int(r[2] or 0)}
-                            for r in rep_traf.get("rows", [])
-                        ]
-                        upsert_trafico(con, traf_puntos)
-                        stats["trafico"] += len(traf_puntos)
-                    except Exception:
-                        pass
+                # Fuentes de tráfico
+                try:
+                    rep_traf = yt_analytics.reports().query(
+                        ids="channel==MINE",
+                        startDate=desde_fecha,
+                        endDate=hoy_str,
+                        metrics="views",
+                        dimensions="day,insightTrafficSourceType",
+                        filters=f"video=={vid}",
+                    ).execute()
+                    traf_puntos = [
+                        {"video_id": vid, "fecha": str(r[0]), "fuente": str(r[1]), "vistas": int(r[2] or 0)}
+                        for r in rep_traf.get("rows", [])
+                    ]
+                    upsert_trafico(con, traf_puntos)
+                    stats["trafico"] += len(traf_puntos)
+                except Exception as e_tr:
+                    errores.append(f"Video {vid} ('{titulo}'): fallo en fuentes de tráfico: {e_tr}")
 
-                    # Curva de retención
-                    try:
-                        rep_ret = yt_analytics.reports().query(
-                            ids="channel==MINE",
-                            startDate="2020-01-01",
-                            endDate=hoy_str,
-                            metrics="audienceWatchRatio",
-                            dimensions="elapsedVideoTimeRatio",
-                            filters=f"video=={vid}",
-                        ).execute()
-                        ret_puntos = [
-                            {
-                                "video_id": vid,
-                                "fecha_corte": hoy_str,
-                                "segundo_relativo": round(float(r[0]) * dur_s, 2),
-                                "pct_audiencia": round(float(r[1] or 0.0) * 100.0, 2),
-                            }
-                            for r in rep_ret.get("rows", [])
-                        ]
-                        upsert_retencion(con, ret_puntos)
-                        stats["retencion"] += len(ret_puntos)
-                    except Exception:
-                        pass
-                else:
-                    # Sin analytics v2 disponible: registrar snapshot diario
-                    upsert_metrica_diaria(con, {
-                        "video_id": vid,
-                        "fecha": hoy_str,
-                        "vistas": vistas_tot,
-                        "minutos_vistos": round((vistas_tot * dur_s * 0.4) / 60.0, 2),
-                        "duracion_media_s": round(dur_s * 0.4, 2),
-                        "pct_visto_medio": 40.0,
-                        "likes": likes_tot,
-                        "comentarios": com_tot,
-                        "suscriptores_ganados": 0,
-                    })
-                    stats["metricas"] += 1
+                # Curva de retención
+                try:
+                    rep_ret = yt_analytics.reports().query(
+                        ids="channel==MINE",
+                        startDate="2020-01-01",
+                        endDate=hoy_str,
+                        metrics="audienceWatchRatio",
+                        dimensions="elapsedVideoTimeRatio",
+                        filters=f"video=={vid}",
+                    ).execute()
+                    ret_puntos = [
+                        {
+                            "video_id": vid,
+                            "fecha_corte": hoy_str,
+                            "segundo_relativo": round(float(r[0]) * dur_s, 2),
+                            "pct_audiencia": round(float(r[1] or 0.0) * 100.0, 2),
+                        }
+                        for r in rep_ret.get("rows", [])
+                    ]
+                    upsert_retencion(con, ret_puntos)
+                    stats["retencion"] += len(ret_puntos)
+                except Exception as e_rt:
+                    errores.append(f"Video {vid} ('{titulo}'): fallo en curva de retención: {e_rt}")
 
         con.commit()
-    except Exception as e:
-        print(f"[AVISO] Excepción durante recolección: {type(e).__name__}: {e}")
+    except Exception as e_gen:
+        errores.append(f"Excepción general en recolección: {e_gen}")
 
-    return stats
+    return stats, errores
 
 
 def main() -> None:
@@ -520,8 +770,9 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
 
     parser = argparse.ArgumentParser(description="Recolector de métricas de YouTube para Docu Factory y Novelas Express MX")
-    parser.add_argument("--canal", type=str, default=None, help="Nombre del canal a filtrar (ej. 'Código OcultoTV' o 'Novelas Express MX')")
+    parser.add_argument("--canal", type=str, default="Código OcultoTV", help="Nombre del canal: 'Código OcultoTV' o 'Novelas Express MX'")
     parser.add_argument("--desde", type=str, default=None, help="Fecha inicial en formato YYYY-MM-DD (por defecto: últimos 3 días)")
+    parser.add_argument("--token", type=Path, default=None, help="Ruta personalizada del archivo de token OAuth")
     parser.add_argument("--db", type=Path, default=DB_DEFAULT, help="Ruta de la base de datos SQLite")
     parser.add_argument("--csv-etiquetas", type=Path, default=CSV_ETIQUETAS_DEFAULT, help="Ruta del archivo CSV con correcciones de etiquetas")
 
@@ -533,22 +784,39 @@ def main() -> None:
 
     print(f"=== Iniciando recolección de métricas ===")
     print(f"  Base de datos: {args.db}")
-    print(f"  Canal: {args.canal or 'Todos los detectados'}")
-    print(f"  Desde: {desde}")
+    print(f"  Canal:         {args.canal}")
+    print(f"  Desde:         {desde}")
 
     con = inicializar_db(db_path=args.db)
+    errores_totales: list[str] = []
+
     try:
-        stats = recolectar_desde_youtube(
+        stats, errs = recolectar_desde_youtube(
             con=con,
             canal_filtro=args.canal,
             desde_fecha=desde,
+            token_path=args.token,
             csv_etiquetas_path=args.csv_etiquetas,
         )
-        print(f"=== Recolección finalizada exitosamente ===")
+        errores_totales.extend(errs)
+
+        escenas_vinculadas = vincular_escenas_locales(con)
+        con.commit()
+
+        print(f"\n=== Resultados de la Recolección ===")
         print(f"  Videos registrados/actualizados: {stats['videos']}")
         print(f"  Registros de métricas diarias:   {stats['metricas']}")
         print(f"  Puntos de retención:             {stats['retencion']}")
         print(f"  Registros de tráfico:            {stats['trafico']}")
+        print(f"  Escenas de proyectos vinculadas: {escenas_vinculadas}")
+
+        if errores_totales:
+            print(f"\n❌ Resumen de Errores ({len(errores_totales)} fallo(s)):", file=sys.stderr)
+            for err in errores_totales:
+                print(f"  - {err}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print("\n[OK] Recolección completada sin errores.")
     finally:
         con.close()
 

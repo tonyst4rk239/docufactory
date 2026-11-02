@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS trafico (
     PRIMARY KEY(video_id, fecha, fuente)
 );
 
+-- 5. Escenas y Cronología del Video (para cruzar con la curva de retención)
+CREATE TABLE IF NOT EXISTS escenas (
+    video_id TEXT NOT NULL REFERENCES videos(video_id) ON DELETE CASCADE,
+    n_escena INTEGER NOT NULL,
+    inicio_s REAL NOT NULL,
+    fin_s REAL NOT NULL,
+    texto TEXT,
+    broll_fuente TEXT,
+    PRIMARY KEY(video_id, n_escena)
+);
+
 -- Índices de aceleración para consultas analíticas
 CREATE INDEX IF NOT EXISTS idx_videos_canal ON videos(canal);
 CREATE INDEX IF NOT EXISTS idx_videos_formato ON videos(formato);
@@ -59,3 +70,4 @@ CREATE INDEX IF NOT EXISTS idx_videos_serie_cap ON videos(serie, capitulo);
 CREATE INDEX IF NOT EXISTS idx_metricas_fecha ON metricas_diarias(fecha);
 CREATE INDEX IF NOT EXISTS idx_retencion_video ON retencion(video_id, fecha_corte);
 CREATE INDEX IF NOT EXISTS idx_trafico_video ON trafico(video_id, fecha);
+CREATE INDEX IF NOT EXISTS idx_escenas_video_tiempo ON escenas(video_id, inicio_s, fin_s);

@@ -16,6 +16,8 @@ RAIZ = Path(__file__).resolve().parent.parent.parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
+from src.metricas.recolectar import _custom_strftime
+
 DB_DEFAULT = RAIZ / "data" / "metricas.db"
 DIR_CONSULTAS_DEFAULT = RAIZ / "sql" / "consultas"
 DIR_REPORTES_DEFAULT = RAIZ / "reportes"
@@ -137,6 +139,24 @@ def sintetizar_analisis(resultados: dict[str, list[dict[str, Any]]]) -> tuple[li
         else:
             senales_debiles.append(f"{texto} (Pocos videos subidos en este intervalo).")
 
+    # 6. Puntos de Fuga (Cruce de Retención con Escenas y B-roll)
+    filas_fuga = resultados.get("puntos_de_fuga", [])
+    for f in filas_fuga[:8]:
+        titulo = f.get("titulo", "Video")
+        seg = f.get("segundo_fuga", 0.0)
+        caida = f.get("caida_pct", 0.0)
+        ret = f.get("retencion_momento", 0.0)
+        n_esc = f.get("n_escena", 0)
+        narr = f.get("narracion_en_segundo", "")
+        broll = f.get("broll_en_pantalla", "")
+        broll_info = f" | B-roll: '{broll}'" if broll and broll != "desconocido" else ""
+        texto = f"Punto crítico de fuga en **{titulo}**: en el segundo {seg:.1f}s la audiencia cayó {caida:+.2f}% (quedando {ret}%) durante Escena {n_esc} (\"{narr}\"{broll_info})."
+
+        if f.get("muestra_chica") == 0:
+            conclusiones.append(f"{texto}")
+        else:
+            senales_debiles.append(f"{texto}")
+
     return conclusiones, senales_debiles
 
 
@@ -158,6 +178,7 @@ def generar_reporte_md(
 
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
+    con.create_function("strftime", 2, _custom_strftime)
 
     orden_consultas = [
         "formato_vs_retencion",
@@ -165,6 +186,7 @@ def generar_reporte_md(
         "ab_largos",
         "novelas_por_capitulo",
         "horario",
+        "puntos_de_fuga",
     ]
 
     titulos_bloques = {
@@ -173,6 +195,7 @@ def generar_reporte_md(
         "ab_largos": "3. Comparativa A/B: Largo Original vs Recopilación",
         "novelas_por_capitulo": "4. Retención en Novelas por Capítulo y Caídas Consecutivas",
         "horario": "5. Rendimiento por Día y Hora de Publicación",
+        "puntos_de_fuga": "6. Puntos Críticos de Fuga (Cruce Retención vs Escenas y B-roll)",
     }
 
     resultados_dict: dict[str, list[dict[str, Any]]] = {}

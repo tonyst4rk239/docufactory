@@ -2,7 +2,7 @@
 
 Este módulo implementa una capa de datos analítica en SQLite para tomar decisiones editoriales y de producción basadas en métricas reales de YouTube Data API v3 y YouTube Analytics API v2.
 
-Permite comparar formatos, series, capítulos, temáticas y horarios de publicación entre **Código OcultoTV** (Docu Factory) y **Novelas Express MX**, distinguiendo con rigor estadístico entre conclusiones respaldadas y señales preliminares.
+Permite comparar formatos, series, capítulos, temáticas y horarios de estreno entre **Código OcultoTV** (Docu Factory) y **Novelas Express MX**, distinguiendo con rigor estadístico entre conclusiones respaldadas y señales preliminares.
 
 ---
 
@@ -12,16 +12,16 @@ La base de datos reside en `data/metricas.db` (en `.gitignore`) y se inicializa 
 
 - **`videos`**: Catálogo maestro de videos.
   - `video_id` (PK): Identificador alfanumérico de YouTube.
-  - `canal`: Nombre del canal (`Código OcultoTV`, `Novelas Express MX`, etc.).
-  - `titulo`: Título original publicado.
+  - `canal`: Nombre del canal (`Código OcultoTV`, `Novelas Express MX`).
+  - `titulo`: Título publicado en YouTube.
   - `formato`: Uno de `'short'`, `'largo_original'`, `'recopilacion'`, `'novela_cap'`.
-  - `tema`: Temática o asunto central.
-  - `serie`: Nombre de la serie o novela (en formato `novela_cap`).
+  - `tema`: Categoría tematica (`leyenda`, `paranormal`, `religión`, `crimen`, `reality`, `historia`, `novela`).
+  - `serie`: Nombre de la serie o drama (en formato `novela_cap`).
   - `capitulo`: Número entero del capítulo/episodio.
   - `duracion_s`: Duración en segundos.
-  - `fecha_publicacion` / `hora_publicacion`: Marca temporal de estreno en YouTube.
+  - `fecha_publicacion` / `hora_publicacion`: Timestamp convertido a hora local de **Mérida** (`America/Merida`).
   - `voz` / `estilo_visual`: Metadatos de producción audiovisual.
-- **`metricas_diarias`**: Rendimiento día a día por video.
+- **`metricas_diarias`**: Rendimiento real diario por video (sin datos inventados).
   - `(video_id, fecha)` (PK compuesto).
   - `vistas`, `minutos_vistos`, `duracion_media_s`, `pct_visto_medio`, `likes`, `comentarios`, `suscriptores_ganados`.
 - **`retencion`**: Curva de retención segundo a segundo.
@@ -30,134 +30,127 @@ La base de datos reside en `data/metricas.db` (en `.gitignore`) y se inicializa 
 - **`trafico`**: Fuentes de tráfico diarias (búsqueda, sugeridos, feed de shorts, etc.).
   - `(video_id, fecha, fuente)` (PK compuesto).
   - `vistas`.
+- **`escenas`**: Línea de tiempo de escenas y guion de proyectos locales (`video_id, n_escena, inicio_s, fin_s, texto, broll_fuente`) para cruzar segundo a segundo con la curva de retención.
 
 ---
 
-## 2. Inferencia de Formato y Etiquetas Manuales
+## 2. Multi-Canal y Verificación de Identidad
 
-El script infiere automáticamente los formatos y metadatos:
-1. **`short`**: Si la duración es $\le 60$ s o contiene `#shorts` / `#short`.
-2. **`novela_cap`**: Si el canal contiene "novela"/"kdrama" o el título incluye expresiones como `Capítulo N`, `Cap. N` o `Episodio N`. Extrae automáticamente el número de capítulo y el nombre de la serie.
-3. **`recopilacion`**: Si el título contiene términos como `Maratón`, `Compilación`, `Recopilación`, `Top N` o `Episodios Completos`.
-4. **`largo_original`**: Videos largos que no corresponden a compilaciones ni novelas episódicas.
+El sistema soporta múltiples canales con tokens OAuth independientes:
 
-### Corrección Manual con CSV (`data/etiquetas_videos.csv`)
+| Canal | Archivo de Token OAuth | Verificación Estricta |
+|---|---|---|
+| **Código OcultoTV** | `assets/credentials/token_youtube.json` | Token por defecto del canal principal |
+| **Novelas Express MX** | `assets/credentials/token_youtube_novelas.json` | **Channel ID obligatorio:** `UC8O5Zv0nsHRfaXij9uJNYbg` |
 
-Cualquier valor inferido puede corregirse sin tocar código agregando una fila en `data/etiquetas_videos.csv`:
-```csv
-video_id,formato,tema,serie,capitulo,voz,estilo_visual
-dQw4w9WgXcQ,recopilacion,Misterios Antiguos,,,Alonso,cinematica
-abc123xyz78,novela_cap,Amor en Seúl,Amor en Seúl,5,Jenny,anime
+Si se intenta cosechar o autorizar Novelas con una cuenta de Google cuyo Channel ID no coincida con `UC8O5Zv0nsHRfaXij9uJNYbg`, el proceso **aborta inmediatamente con un error claro**.
+
+### Autorización OAuth de Canales (`src/metricas/autorizar_canal.py`)
+Para generar o renovar el token de cualquiera de los canales con los permisos de lectura y analíticas (`youtube.readonly` y `yt-analytics.readonly`):
+
+```bash
+# Autorizar canal Novelas Express MX (valida Channel ID y guarda en token_youtube_novelas.json)
+python src/metricas/autorizar_canal.py --canal novelas
+
+# Autorizar canal Código OcultoTV (guarda en token_youtube.json)
+python src/metricas/autorizar_canal.py --canal codigo
+
+# Opcional: especificar ruta personalizada de token o client_secrets
+python src/metricas/autorizar_canal.py --canal novelas --token assets/credentials/token_youtube_novelas.json
 ```
-Si una celda está en blanco, se conserva el valor inferido por defecto.
 
 ---
 
-## 3. Recolección de Datos (`src/metricas/recolectar.py`)
+## 3. Reglas Estrictas de Formato y Categorización de Temas
 
-Extrae métricas vía API y ejecuta **upserts idempotentes** (puedes correrlo múltiples veces sin generar duplicados).
+### Formatos Audiovisuales
+1. **`short`**: Si la duración es $\le 180$ s o si el video es vertical (aspect ratio 9:16 o `#shorts` en el título).
+2. **`recopilacion`**: **ÚNICAMENTE** si está indicado en `data/etiquetas_videos.csv` o si el título incluye explícitamente la etiqueta `[Recopilación]` (o `[Recopilacion]`). **Nunca por "Top N"**.
+3. **`novela_cap`**: **ÚNICAMENTE** en el canal de Novelas Express MX.
+4. **`largo_original`**: Todo video de formato horizontal mayor a 180 s que no sea una recopilación etiquetada.
+
+### Temas y Categorización
+El tema se obtiene de la columna `tema` en `data/etiquetas_videos.csv`. Si viene vacía o no existe registro en el CSV, se clasifica mediante un diccionario de palabras clave en una de las siguientes categorías (nunca se usa el título bruto como tema):
+- `leyenda`, `paranormal`, `religión`, `crimen`, `reality`, `historia`, `novela`.
+
+### Zona Horaria de Publicación (`America/Merida`)
+Los timestamps de estreno en UTC (`publishedAt`) se convierten a la zona horaria `America/Merida` (UTC-6) antes de registrar `fecha_publicacion` y `hora_publicacion`. De este modo, los reportes por día de la semana y hora reflejan el momento local real de la audiencia.
+
+---
+
+## 4. Recolección de Datos (`src/metricas/recolectar.py`)
+
+Extrae métricas reales vía API y ejecuta **upserts idempotentes**.
+
+> **Política de Integridad:** Se eliminó cualquier respaldo con datos inventados (como asumir 40% visto o 0.4x de duración). Si YouTube Analytics falla para un video, **no se guarda la fila en `metricas_diarias`**, se registra el error en un resumen final y el script finaliza con código de error distinto de cero (`sys.exit(1)`).
 
 ### Uso básico:
 ```bash
-# Recolectar últimos 3 días (por defecto)
+# Recolectar últimos 3 días de Código OcultoTV
 python src/metricas/recolectar.py
 
-# Filtrar por canal específico
-python src/metricas/recolectar.py --canal "Código OcultoTV"
+# Recolectar canal Novelas Express MX
 python src/metricas/recolectar.py --canal "Novelas Express MX"
 
 # Definir fecha de inicio personalizada
-python src/metricas/recolectar.py --desde 2026-10-01
+python src/metricas/recolectar.py --canal "Novelas Express MX" --desde 2026-10-01
 
-# Especificar rutas alternativas
-python src/metricas/recolectar.py --db data/metricas.db --csv-etiquetas data/etiquetas_videos.csv
+# Usar token personalizado
+python src/metricas/recolectar.py --canal "Novelas Express MX" --token assets/credentials/token_youtube_novelas.json
 ```
 
 ---
 
-## 4. Generación de Reportes Ejecutivos (`src/metricas/reporte.py`)
+## 5. Consultas SQL Analíticas Ponderadas (`sql/consultas/`)
 
-Ejecuta todas las consultas analíticas de `sql/consultas/` y redacta un reporte consolidado en `reportes/metricas_AAAA-MM-DD.md`.
+Todas las consultas en `sql/consultas/` **ponderan la retención y la duración por vistas**:
+$$\text{retencion\_media} = \frac{\sum (\text{pct\_visto\_medio} \times \text{vistas})}{\text{NULLIF}(\sum \text{vistas}, 0)}$$
+$$\text{duracion\_media\_s} = \frac{\sum (\text{duracion\_media\_s} \times \text{vistas})}{\text{NULLIF}(\sum \text{vistas}, 0)}$$
+
+Además, utilizan la fecha actual `date('now')` como referencia temporal y semanas ISO (`%G-%V`):
+
+- **`formato_vs_retencion.sql`**: Rendimiento ponderado por formato y canal en las últimas 4 semanas (`date('now', '-28 days')`).
+- **`top_temas.sql`**: Categorías temáticas ordenadas por retención ponderada con filtro de volumen mínimo ($\ge 50$ vistas).
+- **`ab_largos.sql`**: Comparativa A/B semana a semana ISO (`%G-%V`) entre `largo_original` y `recopilacion`.
+- **`novelas_por_capitulo.sql`**: Retención ponderada por serie y capítulo, calculando la caída contra el capítulo previo mediante `LAG() OVER (PARTITION BY serie, canal ORDER BY capitulo)`.
+- **`horario.sql`**: Rendimiento ponderado agrupado por día de la semana y hora de estreno en Mérida.
+- **`puntos_de_fuga.sql`**: Cruce segundo a segundo entre la curva de retención y la línea de tiempo de escenas (`escenas`), detectando en qué segundo cayó la audiencia y qué escena o B-roll estaba en pantalla.
+
+Todas las consultas calculan la bandera `muestra_chica` ($1$ si $n\_videos < 3$ o $total\_vistas < 500$, $0$ si es muestra confiable).
+
+---
+
+## 6. Generación de Reportes Ejecutivos (`src/metricas/reporte.py`)
+
+Ejecuta todas las consultas analíticas y redacta un reporte Markdown en `reportes/metricas_AAAA-MM-DD.md` dividiendo los resultados en:
+1. **Conclusiones con Confianza** (`muestra_chica = 0`)
+2. **Señales Débiles** (`muestra_chica = 1`)
 
 ```bash
 python src/metricas/reporte.py
 ```
 
-### Criterio Estadístico: "Muestra Chica"
-Para evitar tomar decisiones apresuradas basadas en 5 o 10 vistas, todas las consultas calculan la bandera `muestra_chica`:
-$$\text{muestra\_chica} = 1 \iff (n\_videos < 3 \lor total\_vistas < 500)$$
+---
 
-El generador de reportes divide el análisis en dos bloques explícitos:
-1. **Conclusiones con Confianza**: Patrones validados con al menos 3 videos y más de 500 vistas (`muestra_chica = 0`).
-2. **Señales Débiles**: Tendencias exploratorias con baja muestra (`muestra_chica = 1`), que sirven como hipótesis pero no como prueba definitiva.
+## 7. Cómo Agregar una Consulta Nueva
+
+1. Crea `sql/consultas/<nombre_de_consulta>.sql`.
+2. Incluye siempre la ponderación por vistas (`SUM(pct_visto_medio*vistas)/NULLIF(SUM(vistas),0)`), la columna `n_videos` y la bandera `muestra_chica`.
+3. Registra el nombre en `orden_consultas` y `titulos_bloques` en `src/metricas/reporte.py`.
 
 ---
 
-## 5. Consultas SQL Disponibles (`sql/consultas/`)
+## 8. Pruebas Unitarias
 
-- **`formato_vs_retencion.sql`**: Promedio de retención (`pct_visto_medio`), vistas y horas acumuladas por formato y canal en las últimas 4 semanas.
-- **`top_temas.sql`**: Temáticas ordenadas por retención media con filtro de volumen mínimo ($\ge 50$ vistas).
-- **`ab_largos.sql`**: Comparativa A/B semana por semana entre `largo_original` y `recopilacion`.
-- **`novelas_por_capitulo.sql`**: Retención por serie y capítulo, calculando la caída de retención y vistas contra el capítulo inmediato anterior mediante funciones de ventana (`LAG() OVER`).
-- **`horario.sql`**: Rendimiento agrupado por día de la semana y hora de estreno.
-
----
-
-## 6. Cómo Agregar una Consulta Nueva
-
-Para añadir una nueva dimensión o análisis al pipeline:
-
-### Paso 1: Crear el archivo SQL en `sql/consultas/`
-Crea `sql/consultas/<nombre_de_consulta>.sql`.
-
-> **Requisito indispensable:** La consulta DEBE incluir las columnas `n_videos` y `muestra_chica`:
-> ```sql
-> SELECT
->     v.estilo_visual,
->     COUNT(DISTINCT v.video_id) AS n_videos,
->     SUM(m.vistas) AS total_vistas,
->     ROUND(AVG(m.pct_visto_medio), 2) AS retencion_media,
->     CASE
->         WHEN COUNT(DISTINCT v.video_id) < 3 OR COALESCE(SUM(m.vistas), 0) < 500 THEN 1
->         ELSE 0
->     END AS muestra_chica
-> FROM videos v
-> JOIN metricas_diarias m ON v.video_id = m.video_id
-> WHERE v.estilo_visual IS NOT NULL
-> GROUP BY v.estilo_visual
-> ORDER BY retencion_media DESC;
-> ```
-
-### Paso 2: Registrar en `src/metricas/reporte.py`
-En `src/metricas/reporte.py`, agrega el nombre de tu consulta a la lista `orden_consultas` y asigna un título descriptivo en `titulos_bloques`:
-```python
-orden_consultas = [
-    "formato_vs_retencion",
-    "top_temas",
-    "ab_largos",
-    "novelas_por_capitulo",
-    "horario",
-    "estilo_visual",  # <--- Tu nueva consulta
-]
-
-titulos_bloques = {
-    ...
-    "estilo_visual": "6. Rendimiento por Estilo Visual",
-}
-```
-
-Opcionalmente, puedes añadir una regla de síntesis en la función `sintetizar_analisis()` para que genere viñetas automáticas en "Conclusiones con Confianza" o "Señales Débiles".
-
----
-
-## 7. Pruebas Unitarias
-
-El suite de pruebas valida la lógica sin requerir conexión a internet ni credenciales reales:
+El suite valida todas las reglas sin llamar a APIs externas:
 ```bash
 python -m unittest tests/test_metricas.py
 ```
 Prueba:
-- Inferencia de formatos (`short`, `largo_original`, `recopilacion`, `novela_cap`).
-- Idempotencia de `upsert_video`, `upsert_metrica_diaria`, `upsert_retencion`, `upsert_trafico`.
-- Cálculo de `muestra_chica` y diferencias `LAG()` en base temporal en memoria.
-- Generación de reportes Markdown con tablas y secciones divididas.
+- Validación y rechazo de Channel ID incorrecto para Novelas Express MX.
+- Omisión estricta de filas cuando Analytics falla (sin datos inventados).
+- Ponderación matemática por vistas frente a promedio simple.
+- Conversión horaria a `America/Merida` (zoneinfo).
+- Categorización de temas por palabras clave (sin usar títulos brutos).
+- Reglas estrictas de formato (Shorts $\le 180$ s/vertical, `[Recopilación]`, `novela_cap` exclusivo de Novelas).
+- Semanas ISO (`%G-%V`) y cruce de retención vs escenas (`puntos_de_fuga.sql`).
