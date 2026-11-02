@@ -10,8 +10,8 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import date, datetime, timedelta, timezone
-from difflib import SequenceMatcher
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -48,6 +48,7 @@ MAPA_CANAL_TOKEN = {
 FORMATOS_VALIDOS = {"short", "largo_original", "recopilacion", "novela_cap"}
 
 CATEGORIAS_TEMAS = [
+    "muerte_mx",
     "novela",
     "crimen",
     "paranormal",
@@ -58,6 +59,12 @@ CATEGORIAS_TEMAS = [
 ]
 
 DICCIONARIO_TEMAS_REGEX = {
+    "muerte_mx": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bmictl\w*", r"\bmuertos?\b", r"\bofrendas?\b", r"\bcementerios?\b",
+            r"\bcatrinas?\b", r"\bxolo\w*", r"\b[aá]nimas?\b"
+        ]
+    ],
     "novela": [
         re.compile(p, re.IGNORECASE) for p in [
             r"\bnovela\b", r"\bkdrama\b", r"\bdorama\b", r"\bcap[ií]tulo\b", r"\bcap\.?\b",
@@ -89,7 +96,7 @@ DICCIONARIO_TEMAS_REGEX = {
     "religión": [
         re.compile(p, re.IGNORECASE) for p in [
             r"\breligi[oó]n\b", r"\bbiblia\b", r"\bb[ií]blico\w*", r"\bdios\b", r"\biglesia\b",
-            r"\bvaticano\b", r"\bpapa\b", r"\bsanto\w*", r"\bapocalipsis\b", r"\bprofec[ií]a\w*",
+            r"\bvaticano\b", r"\bpapas?\b", r"\bsanto\w*", r"\bapocalipsis\b", r"\bprofec[ií]a\w*",
             r"\bmilagro\w*", r"\bjes[uú]s\b", r"\bcristo\b", r"\bfe\b", r"\bsagradas?\b"
         ]
     ],
@@ -111,8 +118,8 @@ DICCIONARIO_TEMAS_REGEX = {
 }
 
 
-def _custom_strftime(fmt: str, val: Any) -> Optional[str]:
-    """Soporte nativo de semanas ISO (%G-%V) y formatos estandar en SQLite."""
+def _fecha_local(fmt: str, val: Any) -> Optional[str]:
+    """Función SQL fecha_local(formato, fecha) para soporte nativo de semanas ISO (%G-%V)."""
     if not val:
         return None
     try:
@@ -121,6 +128,23 @@ def _custom_strftime(fmt: str, val: Any) -> Optional[str]:
         return dt.strftime(fmt)
     except Exception:
         return None
+
+
+def guardar_token_atomicamente(token_file: Path, creds_json: str) -> None:
+    """Escribe a un archivo temporal y luego renombra atómicamente. Nunca toca token_youtube.bak.json."""
+    token_file = Path(token_file)
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = token_file.with_name(f".tmp_{token_file.stem}_{os.getpid()}.json")
+    try:
+        temp_file.write_text(creds_json, encoding="utf-8")
+        temp_file.replace(token_file)
+    except Exception:
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+            except Exception:
+                pass
+        raise
 
 
 def iso_duracion_a_s(duracion_iso: str) -> float:
@@ -153,7 +177,8 @@ def convertir_a_merida(iso_utc_str: str) -> tuple[Optional[str], Optional[str]]:
 def clasificar_tema(titulo: str, canal: str = "", tema_csv: str = "") -> str:
     """Asigna la categoría del tema según CSV o diccionario de palabras clave.
 
-    Nunca retorna el título. Categorías: leyenda, paranormal, religión, crimen, reality, historia, novela.
+    Categorías válidas: muerte_mx, leyenda, paranormal, religión, crimen, reality, historia, novela.
+    Nunca retorna el título bruto.
     """
     if tema_csv and tema_csv.strip():
         return tema_csv.strip()
@@ -164,7 +189,7 @@ def clasificar_tema(titulo: str, canal: str = "", tema_csv: str = "") -> str:
     if "novela" in c_lower:
         return "novela"
 
-    for cat in ("novela", "crimen", "paranormal", "leyenda", "religión", "reality", "historia"):
+    for cat in CATEGORIAS_TEMAS:
         for reg in DICCIONARIO_TEMAS_REGEX[cat]:
             if reg.search(t_lower):
                 return cat
@@ -184,11 +209,10 @@ def inferir_formato_y_metadatos(
 ) -> dict[str, Any]:
     """Infiere formato, tema, serie y capitulo con reglas estrictas:
 
-    - short: duracion <= 180 s o es vertical (aspecto 9:16 o #shorts).
-    - recopilacion: SOLO desde CSV o si el titulo trae exactamente '[Recopilación]' (nunca por 'Top N').
-    - novela_cap: SOLO en el canal de Novelas.
-    - largo_original: resto de videos.
-    - tema: desde CSV o clasificador tematico por diccionario, nunca el titulo.
+    1. recopilacion: SOLO desde CSV o si el titulo trae exactamente '[Recopilación]' (nunca por 'Top N').
+    2. novela_cap: EN EL CANAL NOVELAS EXPRESS MX se clasifica ANTES de la regla de Short (<=180 s).
+    3. short: duracion <= 180 s o es vertical (aspecto 9:16 o #shorts) en otros canales.
+    4. largo_original: resto de videos.
     """
     t_lower = (titulo or "").lower()
     c_lower = (canal or "").lower()
@@ -206,19 +230,7 @@ def inferir_formato_y_metadatos(
             "capitulo": capitulo_csv,
         }
 
-    # 2. Short: duracion <= 180s o vertical
-    tiene_hashtag_short = bool(re.search(r"#shorts?\b", t_lower))
-    if (duracion_s > 0 and duracion_s <= 180.0) or es_vertical or tiene_hashtag_short:
-        formato = "short"
-        tema = clasificar_tema(titulo, canal, tema_csv)
-        return {
-            "formato": formato,
-            "tema": tema,
-            "serie": serie_csv or None,
-            "capitulo": capitulo_csv,
-        }
-
-    # 3. Novela Cap: SOLO en el canal de Novelas
+    # 2. Novela Cap: En Novelas Express MX, se clasifica ANTES de la regla de Short (<=180 s)
     if es_canal_novela:
         formato = "novela_cap"
         tema = clasificar_tema(titulo, canal, tema_csv)
@@ -239,6 +251,18 @@ def inferir_formato_y_metadatos(
             "capitulo": cap,
         }
 
+    # 3. Short: duracion <= 180s o vertical
+    tiene_hashtag_short = bool(re.search(r"#shorts?\b", t_lower))
+    if (duracion_s > 0 and duracion_s <= 180.0) or es_vertical or tiene_hashtag_short:
+        formato = "short"
+        tema = clasificar_tema(titulo, canal, tema_csv)
+        return {
+            "formato": formato,
+            "tema": tema,
+            "serie": serie_csv or None,
+            "capitulo": capitulo_csv,
+        }
+
     # 4. Largo original por defecto
     formato = formato_csv if formato_csv in FORMATOS_VALIDOS else "largo_original"
     tema = clasificar_tema(titulo, canal, tema_csv)
@@ -257,7 +281,7 @@ def inicializar_db(db_path: Path = DB_DEFAULT, schema_path: Path = SCHEMA_DEFAUL
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON;")
-    con.create_function("strftime", 2, _custom_strftime)
+    con.create_function("fecha_local", 2, _fecha_local)
     if Path(schema_path).exists():
         sql = Path(schema_path).read_text(encoding="utf-8")
         con.executescript(sql)
@@ -444,14 +468,41 @@ def upsert_escenas(con: sqlite3.Connection, video_id: str, lista_escenas: list[d
     ])
 
 
+def buscar_video_id_en_proyecto(carpeta: Path) -> tuple[Optional[str], bool]:
+    """Busca video_id en publicacion*.json o similar dentro del proyecto.
+
+    Retorna (video_id, es_short). Nunca empata por título parecido.
+    """
+    candidatos = list(carpeta.glob("publicacion*.json")) + list((carpeta / "publicacion").glob("*.json"))
+    proj_json = carpeta / "proyecto.json"
+    if proj_json.exists():
+        candidatos.append(proj_json)
+
+    for p in candidatos:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                vid = d.get("video_id") or d.get("yt_id") or d.get("id")
+                if vid and isinstance(vid, str) and len(vid) == 11:
+                    es_short = bool(d.get("es_short") or d.get("short") or "short" in str(p).lower())
+                    return vid, es_short
+        except Exception:
+            pass
+    return None, False
+
+
 def vincular_escenas_locales(con: sqlite3.Connection, dir_proyectos: Path = RAIZ / "proyectos") -> int:
-    """Inspecciona proyectos locales y vincula su cronología con los videos en la base."""
+    """Inspecciona proyectos locales y vincula su cronología con los videos en la base.
+
+    Solo empata por video_id guardado al subir (publicacion*.json o similar),
+    nunca por título parecido, y nunca un Short con un proyecto largo.
+    """
     dir_proyectos = Path(dir_proyectos)
     if not dir_proyectos.exists():
         return 0
 
-    cur = con.execute("SELECT video_id, titulo FROM videos")
-    videos_bd = [dict(r) for r in cur.fetchall()]
+    cur = con.execute("SELECT video_id, titulo, formato FROM videos")
+    videos_bd = {r["video_id"]: dict(r) for r in cur.fetchall()}
     if not videos_bd:
         return 0
 
@@ -464,24 +515,20 @@ def vincular_escenas_locales(con: sqlite3.Connection, dir_proyectos: Path = RAIZ
         if not guion_path.exists():
             continue
 
+        vid, proj_es_short = buscar_video_id_en_proyecto(carpeta)
+        if not vid or vid not in videos_bd:
+            # Nunca empatar por título parecido
+            continue
+
+        v_bd = videos_bd[vid]
+        es_video_short = (v_bd.get("formato") == "short")
+        # Nunca empatar un Short con un proyecto largo
+        if es_video_short != proj_es_short:
+            continue
+
         try:
             g_data = json.loads(guion_path.read_text(encoding="utf-8"))
         except Exception:
-            continue
-
-        titulo_trabajo = g_data.get("titulo_trabajo") or carpeta.name.replace("video_", "").replace("_", " ")
-
-        mejor_vid = None
-        mejor_score = 0.0
-        for v in videos_bd:
-            sc = SequenceMatcher(None, titulo_trabajo.lower(), v["titulo"].lower()).ratio()
-            if carpeta.name.replace("video_", "").lower() in v["titulo"].lower():
-                sc = max(sc, 0.9)
-            if sc > mejor_score:
-                mejor_score = sc
-                mejor_vid = v["video_id"]
-
-        if not mejor_vid or mejor_score < 0.5:
             continue
 
         escenas_raw = g_data.get("escenas", [])
@@ -525,7 +572,7 @@ def vincular_escenas_locales(con: sqlite3.Connection, dir_proyectos: Path = RAIZ
             })
 
         if lista_a_guardar:
-            upsert_escenas(con, mejor_vid, lista_a_guardar)
+            upsert_escenas(con, vid, lista_a_guardar)
             total_escenas += len(lista_a_guardar)
 
     return total_escenas
@@ -564,7 +611,8 @@ def obtener_servicios_youtube(canal: str = "Código OcultoTV", token_path: Optio
     if not creds.valid:
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            token_file.write_text(creds.to_json(), encoding="utf-8")
+            # Escritura atómica a archivo temporal sin tocar backups
+            guardar_token_atomicamente(token_file, creds.to_json())
         else:
             raise RuntimeError(f"El token {token_file.name} no es válido ni renovable. Re-autoriza el canal.")
 
@@ -661,7 +709,6 @@ def recolectar_desde_youtube(
                 fecha_pub, hora_pub = convertir_a_merida(pub_at)
                 dur_s = iso_duracion_a_s(cnt.get("duration", ""))
 
-                # Leer etiquetas manuales previas si existen
                 csv_item = etiquetas_csv.get(vid, {})
 
                 # Inferencia con reglas estrictas
@@ -687,7 +734,7 @@ def recolectar_desde_youtube(
                 upsert_video(con, meta)
                 stats["videos"] += 1
 
-                # Consulta obligatoria a YouTube Analytics API
+                # Consulta obligatoria a YouTube Analytics API (sin datos inventados)
                 try:
                     rep = yt_analytics.reports().query(
                         ids="channel==MINE",

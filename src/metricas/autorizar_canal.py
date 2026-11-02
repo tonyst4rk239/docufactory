@@ -14,6 +14,8 @@ import argparse
 from pathlib import Path
 import sys
 
+from src.metricas.recolectar import guardar_token_atomicamente
+
 RAIZ = Path(__file__).resolve().parent.parent.parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
@@ -95,7 +97,7 @@ def autorizar_canal(
                 "Por favor selecciona la cuenta de Google correcta."
             )
 
-    dest_token.write_text(creds.to_json(), encoding="utf-8")
+    guardar_token_atomicamente(dest_token, creds.to_json())
     print(f"[OK] Canal validado exitosamente: '{actual_title}' (ID: {actual_id})")
     print(f"[OK] Token guardado en: {dest_token}")
 

@@ -4,7 +4,7 @@
 -- Incluye n_videos y bandera muestra_chica (< 3 videos o < 500 vistas).
 
 SELECT
-    STRFTIME('%G-%V', m.fecha) AS semana,
+    FECHA_LOCAL('%G-%V', m.fecha) AS semana,
     v.canal,
     v.formato,
     COUNT(DISTINCT v.video_id) AS n_videos,

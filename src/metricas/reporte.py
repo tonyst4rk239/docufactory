@@ -16,7 +16,7 @@ RAIZ = Path(__file__).resolve().parent.parent.parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
-from src.metricas.recolectar import _custom_strftime
+from src.metricas.recolectar import _fecha_local
 
 DB_DEFAULT = RAIZ / "data" / "metricas.db"
 DIR_CONSULTAS_DEFAULT = RAIZ / "sql" / "consultas"
@@ -178,7 +178,7 @@ def generar_reporte_md(
 
     con = sqlite3.connect(str(db_path))
     con.row_factory = sqlite3.Row
-    con.create_function("strftime", 2, _custom_strftime)
+    con.create_function("fecha_local", 2, _fecha_local)
 
     orden_consultas = [
         "formato_vs_retencion",

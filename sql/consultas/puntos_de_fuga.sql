@@ -1,6 +1,6 @@
 -- puntos_de_fuga.sql
--- Cruza la curva de retención con las escenas y momentos del video para saber exactamente
--- en qué segundo se va la gente, cuánta audiencia cae y qué estaba pasando en pantalla.
+-- Cruza la curva de retención con las escenas del proyecto vinculado por video_id al subir.
+-- Filtra total_vistas >= 200, ignora el segundo 0 y puntos arriba de 100%.
 -- Incluye n_videos y bandera muestra_chica (< 3 videos o < 500 vistas).
 
 WITH retencion_calculada AS (
@@ -17,6 +17,8 @@ WITH retencion_calculada AS (
             2
         ) AS caida_pct
     FROM retencion r
+    WHERE r.segundo_relativo > 0
+      AND r.pct_audiencia <= 100.0
 ),
 video_totales AS (
     SELECT
@@ -43,10 +45,11 @@ SELECT
     END AS muestra_chica
 FROM retencion_calculada rc
 JOIN videos v ON rc.video_id = v.video_id
-LEFT JOIN video_totales vt ON v.video_id = vt.video_id
+JOIN video_totales vt ON v.video_id = vt.video_id
 LEFT JOIN escenas e ON rc.video_id = e.video_id
     AND rc.segundo_relativo >= e.inicio_s
     AND rc.segundo_relativo < e.fin_s
-WHERE rc.caida_pct IS NOT NULL
+WHERE vt.total_vistas >= 200
+  AND rc.caida_pct IS NOT NULL
 ORDER BY rc.caida_pct ASC
 LIMIT 30;

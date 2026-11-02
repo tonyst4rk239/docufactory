@@ -64,17 +64,22 @@ python src/metricas/autorizar_canal.py --canal novelas --token assets/credential
 ## 3. Reglas Estrictas de Formato y Categorización de Temas
 
 ### Formatos Audiovisuales
-1. **`short`**: Si la duración es $\le 180$ s o si el video es vertical (aspect ratio 9:16 o `#shorts` en el título).
-2. **`recopilacion`**: **ÚNICAMENTE** si está indicado en `data/etiquetas_videos.csv` o si el título incluye explícitamente la etiqueta `[Recopilación]` (o `[Recopilacion]`). **Nunca por "Top N"**.
-3. **`novela_cap`**: **ÚNICAMENTE** en el canal de Novelas Express MX.
+1. **`recopilacion`**: **ÚNICAMENTE** si está indicado en `data/etiquetas_videos.csv` o si el título incluye explícitamente la etiqueta `[Recopilación]` (o `[Recopilacion]`). **Nunca por "Top N"**.
+2. **`novela_cap`**: En el canal **Novelas Express MX**, se clasifica **ANTES** de la regla de Short ($\le 180$ s). Extrae la serie y el capítulo del título (`Ep N` / `Cap N`).
+3. **`short`**: Si la duración es $\le 180$ s o si el video es vertical (aspect ratio 9:16 o `#shorts` en el título) en canales que no son Novelas.
 4. **`largo_original`**: Todo video de formato horizontal mayor a 180 s que no sea una recopilación etiquetada.
 
 ### Temas y Categorización
 El tema se obtiene de la columna `tema` en `data/etiquetas_videos.csv`. Si viene vacía o no existe registro en el CSV, se clasifica mediante un diccionario de palabras clave en una de las siguientes categorías (nunca se usa el título bruto como tema):
-- `leyenda`, `paranormal`, `religión`, `crimen`, `reality`, `historia`, `novela`.
+- `muerte_mx` (`mictlan`, `muertos`, `ofrenda`, `cementerio`, `catrina`, `xolo`, `ánimas`).
+- `religión` (incluye `\bpapas?\b`, `biblia`, `vaticano`, `iglesia`).
+- `leyenda`, `paranormal`, `crimen`, `reality`, `historia`, `novela`.
 
 ### Zona Horaria de Publicación (`America/Merida`)
 Los timestamps de estreno en UTC (`publishedAt`) se convierten a la zona horaria `America/Merida` (UTC-6) antes de registrar `fecha_publicacion` y `hora_publicacion`. De este modo, los reportes por día de la semana y hora reflejan el momento local real de la audiencia.
+
+### Escritura Atómica de Tokens
+Al refrescar o guardar tokens OAuth, se escribe a un archivo temporal y luego se renombra atómicamente, sin tocar nunca `token_youtube.bak.json`.
 
 ---
 
@@ -107,14 +112,17 @@ Todas las consultas en `sql/consultas/` **ponderan la retención y la duración 
 $$\text{retencion\_media} = \frac{\sum (\text{pct\_visto\_medio} \times \text{vistas})}{\text{NULLIF}(\sum \text{vistas}, 0)}$$
 $$\text{duracion\_media\_s} = \frac{\sum (\text{duracion\_media\_s} \times \text{vistas})}{\text{NULLIF}(\sum \text{vistas}, 0)}$$
 
-Además, utilizan la fecha actual `date('now')` como referencia temporal y semanas ISO (`%G-%V`):
+Además, utilizan la fecha actual `date('now')` como referencia temporal, la función `FECHA_LOCAL('%G-%V', m.fecha)` para semanas ISO (sin sobrescribir `strftime` nativo de SQLite) y filtros de calidad:
 
 - **`formato_vs_retencion.sql`**: Rendimiento ponderado por formato y canal en las últimas 4 semanas (`date('now', '-28 days')`).
 - **`top_temas.sql`**: Categorías temáticas ordenadas por retención ponderada con filtro de volumen mínimo ($\ge 50$ vistas).
-- **`ab_largos.sql`**: Comparativa A/B semana a semana ISO (`%G-%V`) entre `largo_original` y `recopilacion`.
+- **`ab_largos.sql`**: Comparativa A/B semana a semana ISO (`FECHA_LOCAL('%G-%V', m.fecha)`) entre `largo_original` y `recopilacion`.
 - **`novelas_por_capitulo.sql`**: Retención ponderada por serie y capítulo, calculando la caída contra el capítulo previo mediante `LAG() OVER (PARTITION BY serie, canal ORDER BY capitulo)`.
 - **`horario.sql`**: Rendimiento ponderado agrupado por día de la semana y hora de estreno en Mérida.
 - **`puntos_de_fuga.sql`**: Cruce segundo a segundo entre la curva de retención y la línea de tiempo de escenas (`escenas`), detectando en qué segundo cayó la audiencia y qué escena o B-roll estaba en pantalla.
+  - Filtra videos con `total_vistas >= 200`.
+  - Ignora el segundo 0 y puntos anómalos $> 100\%$.
+  - Empata video y proyecto exclusivamente por el `video_id` guardado al subir (`publicacion*.json` o similar), nunca por título parecido, y nunca un Short con un proyecto largo.
 
 Todas las consultas calculan la bandera `muestra_chica` ($1$ si $n\_videos < 3$ o $total\_vistas < 500$, $0$ si es muestra confiable).
 
