@@ -75,6 +75,11 @@ class TestMetricas(unittest.TestCase):
         c1 = inferir_formato_y_metadatos("Misterio en el Mar | Ep 3", 120.0, canal="Código OcultoTV")
         self.assertEqual(c1["formato"], "short")
 
+        # Requisito 4: canal Novelas, duración 90 s, "Cap 3" -> formato novela_cap, capitulo 3
+        n3 = inferir_formato_y_metadatos("Cap 3", 90.0, canal="Novelas Express MX")
+        self.assertEqual(n3["formato"], "novela_cap")
+        self.assertEqual(n3["capitulo"], 3)
+
     # -----------------------------------------------------------------------
     # Requisito 2: Temas con muerte_mx y \bpapas?\b en religión
     # -----------------------------------------------------------------------
@@ -362,6 +367,55 @@ class TestMetricas(unittest.TestCase):
                         obtener_servicios_youtube(canal="Novelas Express MX")
                     self.assertIn("Error de verificación de canal", str(ctx.exception))
                     self.assertIn(NOVELAS_CHANNEL_ID, str(ctx.exception))
+
+
+    def test_novelas_duracion_90s_cap_3_especifico(self):
+        """Requisito 4: canal Novelas, duración 90 s, 'Cap 3' -> formato novela_cap, capitulo 3."""
+        res = inferir_formato_y_metadatos("Cap 3", 90.0, canal="Novelas Express MX")
+        self.assertEqual(res["formato"], "novela_cap")
+        self.assertEqual(res["capitulo"], 3)
+
+    def test_clasificacion_temas_nuevos_y_especificos(self):
+        """Clasifica los 6 temas manuales y verifica que Ramón Ayala sea reality, no paranormal."""
+        self.assertEqual(clasificar_tema("La Pascualita de Chihuahua"), "leyenda")
+        self.assertEqual(clasificar_tema("Un robot bajó bajo el Arca de Noé"), "religión")
+        self.assertEqual(clasificar_tema("Real o IA: el burro que habla"), "viral")
+        self.assertEqual(clasificar_tema("Pelea en vivo en La Granja VIP"), "reality")
+        self.assertEqual(clasificar_tema("5 videos paranormales captados en cámara"), "paranormal")
+        self.assertEqual(clasificar_tema("Top 5 Enjambres de IA y armas autónomas"), "tecnologia")
+        # El apagón de Ramón Ayala es reality, no paranormal
+        self.assertEqual(clasificar_tema("El misterioso apagón a Ramón Ayala en La México"), "reality")
+
+    def test_buscar_video_id_publicado_txt(self):
+        """buscar_video_id_en_proyecto lee PUBLICADO.txt con regex y decide es_short por URL o render."""
+        dir_p = Path(self.temp_dir.name) / "proj_publicado"
+        dir_p.mkdir(parents=True, exist_ok=True)
+        pub_dir = dir_p / "publicacion"
+        pub_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. URL con /shorts/ -> es_short = True
+        (pub_dir / "PUBLICADO.txt").write_text("Publicado en https://youtube.com/shorts/AbCdEf12345\n", encoding="utf-8")
+        vid, es_short = buscar_video_id_en_proyecto(dir_p)
+        self.assertEqual(vid, "AbCdEf12345")
+        self.assertTrue(es_short)
+
+        # 2. URL estándar con youtu.be y render largo (>180s) -> es_short = False
+        (dir_p / "proyecto.json").write_text(json.dumps({"minutos": 4.0}), encoding="utf-8")
+        (pub_dir / "PUBLICADO.txt").write_text("Publicado en https://youtu.be/ZyXwVu98765\n", encoding="utf-8")
+        vid2, es_short2 = buscar_video_id_en_proyecto(dir_p)
+        self.assertEqual(vid2, "ZyXwVu98765")
+        self.assertFalse(es_short2)
+
+    def test_etiquetas_csv_formato_11_chars(self):
+        """Verifica que data/etiquetas_videos.csv use IDs de 11 caracteres y no tenga filas inválidas."""
+        etiquetas = cargar_etiquetas_csv(RAIZ / "data" / "etiquetas_videos.csv")
+        self.assertGreater(len(etiquetas), 0)
+        for vid, meta in etiquetas.items():
+            self.assertEqual(len(vid), 11, f"video_id {vid} debe tener exactamente 11 caracteres")
+            self.assertFalse(vid.startswith("test_revision_lente"))
+            self.assertFalse(vid.startswith("misterio_prueba"))
+            self.assertFalse("amor_seul" in vid)
+            self.assertFalse("venganza" in vid)
 
 
 if __name__ == "__main__":

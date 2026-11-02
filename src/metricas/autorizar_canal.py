@@ -14,11 +14,11 @@ import argparse
 from pathlib import Path
 import sys
 
-from src.metricas.recolectar import guardar_token_atomicamente
-
 RAIZ = Path(__file__).resolve().parent.parent.parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
+
+from src.metricas.recolectar import guardar_token_atomicamente
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",

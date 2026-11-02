@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import sys
 from typing import Any, Optional
 import wave
@@ -51,11 +52,13 @@ CATEGORIAS_TEMAS = [
     "muerte_mx",
     "novela",
     "crimen",
+    "reality",
+    "viral",
     "paranormal",
     "leyenda",
     "religión",
-    "reality",
     "historia",
+    "tecnologia",
 ]
 
 DICCIONARIO_TEMAS_REGEX = {
@@ -76,43 +79,57 @@ DICCIONARIO_TEMAS_REGEX = {
             r"\bcrimen\b", r"\basesin\w*", r"\bhomicid\w*", r"\bnarco\w*", r"\bc[aá]rtel\b",
             r"\bprisi[oó]n\b", r"\bc[aá]rcel\b", r"\brobo\b", r"\bpolic[ií]a\b", r"\bdelito\b",
             r"\bjuicio\b", r"\bforense\b", r"\bcondena\b", r"\bdesaparici[oó]n\b", r"\bsecuestr\w*",
-            r"\bculpable\b", r"\binocente\b"
-        ]
-    ],
-    "paranormal": [
-        re.compile(p, re.IGNORECASE) for p in [
-            r"\bparanormal\b", r"\bfantasma\w*", r"\bovni\b", r"\bufo\b", r"\bextraterrestre\w*",
-            r"\balien\w*", r"\bdemonio\w*", r"\bposesi[oó]n\b", r"\bexorcismo\b", r"\bmisterio\w*",
-            r"\baparici[oó]n\b", r"\bente\b", r"\bouija\b", r"\bterror\b", r"\bespectro\b",
-            r"\bpoltergeist\b", r"\benigma\w*"
-        ]
-    ],
-    "leyenda": [
-        re.compile(p, re.IGNORECASE) for p in [
-            r"\bleyenda\w*", r"\bmito\w*", r"\bfolclor\w*", r"\bcriptozoolog[ií]a\b", r"\bnahual\w*",
-            r"\bchupacabras\b", r"\bmonstruo\w*", r"\bmaldici[oó]n\b", r"\burbana\b", r"\bla llorona\b"
-        ]
-    ],
-    "religión": [
-        re.compile(p, re.IGNORECASE) for p in [
-            r"\breligi[oó]n\b", r"\bbiblia\b", r"\bb[ií]blico\w*", r"\bdios\b", r"\biglesia\b",
-            r"\bvaticano\b", r"\bpapas?\b", r"\bsanto\w*", r"\bapocalipsis\b", r"\bprofec[ií]a\w*",
-            r"\bmilagro\w*", r"\bjes[uú]s\b", r"\bcristo\b", r"\bfe\b", r"\bsagradas?\b"
+            r"\bculpable\b", r"\binocente\b", r"\bdiddy\b", r"\bsean diddy\b"
         ]
     ],
     "reality": [
         re.compile(p, re.IGNORECASE) for p in [
             r"\breality\b", r"\bacapulco shore\b", r"\bcasa de los famosos\b", r"\bpol[eé]mica\b",
             r"\besc[aá]ndalo\b", r"\bpelea\b", r"\binfluencer\w*", r"\bchisme\w*", r"\bfar[aá]ndula\b",
-            r"\bdesplante\b", r"\ben vivo\b", r"\bconcierto\b", r"\bviral\b"
+            r"\bdesplante\b", r"\ben vivo\b", r"\bconcierto\b", r"\bgranja vip\b", r"\bla granja\b",
+            r"\bram[oó]n ayala\b", r"\bayala\b", r"\bnatanael cano\b", r"\bbogueto\b", r"\bjosi cuen\b",
+            r"\bmanelyk\b", r"\bsydney sweeney\b"
+        ]
+    ],
+    "paranormal": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bparanormal\w*", r"\bfantasma\w*", r"\bovni\b", r"\bufo\b", r"\bextraterrestre\w*",
+            r"\balien\w*", r"\bdemonio\w*", r"\bposesi[oó]n\b", r"\bexorcismo\b", r"\bmisterio\w*",
+            r"\baparici[oó]n\b", r"\bente\b", r"\bouija\b", r"\bterror\b", r"\bespectro\b",
+            r"\bpoltergeist\b", r"\benigma\w*", r"\baterrador\w*", r"\btenebros\w*", r"\bperturbador\w*"
+        ]
+    ],
+    "leyenda": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bleyenda\w*", r"\bmito\w*", r"\bfolclor\w*", r"\bcriptozoolog[ií]a\b", r"\bnahual\w*",
+            r"\bchupacabras\b", r"\bmonstruo\w*", r"\bmaldici[oó]n\b", r"\burbana\b", r"\bla llorona\b",
+            r"\bpascualita\b"
+        ]
+    ],
+    "religión": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\breligi[oó]n\b", r"\bbiblia\b", r"\bb[ií]blico\w*", r"\bdios\b", r"\biglesia\b",
+            r"\bvaticano\b", r"\bpapas?\b", r"\bsanto\w*", r"\bapocalipsis\b", r"\bprofec[ií]a\w*",
+            r"\bmilagro\w*", r"\bjes[uú]s\b", r"\bcristo\b", r"\bfe\b", r"\bsagradas?\b",
+            r"\barca de no[eé]\b", r"\bno[eé]\b", r"\barca\b"
         ]
     ],
     "historia": [
         re.compile(p, re.IGNORECASE) for p in [
             r"\bhistoria\w*", r"\bhist[oó]rico\w*", r"\bguerra\w*", r"\bimperio\w*", r"\brevoluci[oó]n\b",
             r"\bsiglo\b", r"\barqueolog[ií]a\b", r"\bantiguo\w*", r"\bmaya\w*", r"\begipto\b",
-            r"\bcivilizaci[oó]n\b", r"\bcomputaci[oó]n\b", r"\binvento\w*", r"\btransistor\b",
-            r"\btecnolog[ií]a\b", r"\bciencia\b"
+            r"\bcivilizaci[oó]n\b", r"\binvento\w*", r"\btransistor\b"
+        ]
+    ],
+    "tecnologia": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\btecnolog[ií]a\w*", r"\btecnol[oó]gic\w*", r"\benjambres?\b", r"\binteligencia artificial\b",
+            r"\bia\b", r"\brobot\w*", r"\bciber\w*", r"\bcu[aá]ntic\w*", r"\bcomputaci[oó]n\b", r"\baut[oó]nom\w*"
+        ]
+    ],
+    "viral": [
+        re.compile(p, re.IGNORECASE) for p in [
+            r"\bviral\b", r"\breal o ia\b", r"\bburro\w*", r"\btrend\w*", r"\btiktok\w*"
         ]
     ],
 }
@@ -468,33 +485,173 @@ def upsert_escenas(con: sqlite3.Connection, video_id: str, lista_escenas: list[d
     ])
 
 
-def buscar_video_id_en_proyecto(carpeta: Path) -> tuple[Optional[str], bool]:
-    """Busca video_id en publicacion*.json o similar dentro del proyecto.
+REGEX_PUBLICADO_YT = re.compile(r"(?:youtu\.be/|shorts/|v=)([A-Za-z0-9_-]{11})")
 
-    Retorna (video_id, es_short). Nunca empata por título parecido.
-    """
-    candidatos = list(carpeta.glob("publicacion*.json")) + list((carpeta / "publicacion").glob("*.json"))
+
+def _obtener_duracion_archivo(ruta: Path) -> float:
+    """Obtiene la duración en segundos usando wave o ffprobe."""
+    if not ruta or not ruta.exists():
+        return 0.0
+    if ruta.suffix.lower() == ".wav":
+        try:
+            with wave.open(str(ruta), "rb") as wf:
+                return wf.getnframes() / float(wf.getframerate())
+        except Exception:
+            pass
+
+    ffprobe = "ffprobe"
+    try:
+        from src import config
+        ffprobe = config.ffmpeg_bin("ffprobe") or "ffprobe"
+    except Exception:
+        pass
+
+    try:
+        cmd = [
+            ffprobe, "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(ruta),
+        ]
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def _obtener_duracion_render_proyecto(carpeta: Path) -> float:
+    """Calcula la duración en segundos del render o del guion del proyecto."""
+    candidatos = [
+        carpeta / "render" / "video_16x9.mp4",
+        carpeta / "renders" / "video_con_voz_ia.mp4",
+        carpeta / "renders" / "tiktok_con_voz_ia.mp4",
+    ]
+    if (carpeta / "renders").exists():
+        candidatos.extend((carpeta / "renders").glob("*.mp4"))
+    if (carpeta / "render").exists():
+        candidatos.extend((carpeta / "render").glob("*.mp4"))
+    candidatos.extend(carpeta.glob("*.mp4"))
+
+    for c in candidatos:
+        if c.exists() and c.is_file() and c.stat().st_size > 1000:
+            dur = _obtener_duracion_archivo(c)
+            if dur > 0.1:
+                return dur
+
     proj_json = carpeta / "proyecto.json"
     if proj_json.exists():
-        candidatos.append(proj_json)
-
-    for p in candidatos:
         try:
-            d = json.loads(p.read_text(encoding="utf-8"))
+            d = json.loads(proj_json.read_text(encoding="utf-8"))
+            if "minutos" in d and float(d["minutos"]) > 0:
+                return float(d["minutos"]) * 60.0
+        except Exception:
+            pass
+
+    dir_voz = carpeta / "voz"
+    guion_path = carpeta / "guion" / "guion.json"
+    if not guion_path.exists():
+        guion_path = carpeta / "guion" / "guion_tiktok.json"
+    if guion_path.exists():
+        try:
+            g = json.loads(guion_path.read_text(encoding="utf-8"))
+            escenas = g.get("escenas") or []
+            total_dur = 0.0
+            for idx, esc in enumerate(escenas, start=1):
+                eid = esc.get("id") or idx
+                d_esc = 0.0
+                for wc in [dir_voz / f"escena_{eid:03d}.wav", dir_voz / f"escena_{eid}.wav", dir_voz / f"escena_{eid:03d}.mp3"]:
+                    if wc.exists():
+                        d_esc = _obtener_duracion_archivo(wc)
+                        if d_esc > 0.1:
+                            break
+                if d_esc <= 0.1:
+                    palabras = len((esc.get("voz") or "").split())
+                    d_esc = max(2.5, palabras / 2.5)
+                total_dur += d_esc
+            if total_dur > 0.1:
+                return total_dur
+        except Exception:
+            pass
+
+    return 0.0
+
+
+def buscar_video_id_en_proyecto(carpeta: Path) -> tuple[Optional[str], bool]:
+    """Busca video_id en publicacion/PUBLICADO.txt, publicacion*.json o similar dentro del proyecto.
+
+    Retorna (video_id, es_short). Nunca empata por título parecido.
+    Decide es_short por la URL (/shorts/) o por la duración del render, no por el nombre del archivo.
+    """
+    carpeta = Path(carpeta)
+
+    # 1. Leer publicacion/PUBLICADO.txt (o PUBLICADO.txt en la raíz)
+    txt_candidatos = [
+        carpeta / "publicacion" / "PUBLICADO.txt",
+        carpeta / "PUBLICADO.txt",
+    ]
+    if (carpeta / "publicacion").exists():
+        txt_candidatos.extend((carpeta / "publicacion").glob("*PUBLICADO*.txt"))
+    txt_candidatos.extend(carpeta.glob("*PUBLICADO*.txt"))
+
+    for p_txt in txt_candidatos:
+        if p_txt.exists() and p_txt.is_file():
+            try:
+                contenido = p_txt.read_text(encoding="utf-8", errors="ignore")
+                m = REGEX_PUBLICADO_YT.search(contenido)
+                if m:
+                    vid = m.group(1)
+                    if "/shorts/" in contenido:
+                        es_short = True
+                    else:
+                        dur = _obtener_duracion_render_proyecto(carpeta)
+                        es_short = (dur <= 180.0) if dur > 0 else False
+                    return vid, es_short
+            except Exception:
+                pass
+
+    # 2. Leer archivos JSON (publicacion*.json, publicacion/*.json, proyecto.json)
+    json_candidatos = list(carpeta.glob("publicacion*.json"))
+    if (carpeta / "publicacion").exists():
+        json_candidatos.extend((carpeta / "publicacion").glob("*.json"))
+    proj_json = carpeta / "proyecto.json"
+    if proj_json.exists():
+        json_candidatos.append(proj_json)
+
+    for p in json_candidatos:
+        try:
+            contenido = p.read_text(encoding="utf-8")
+            d = json.loads(contenido)
             if isinstance(d, dict):
                 vid = d.get("video_id") or d.get("yt_id") or d.get("id")
+                url = str(d.get("url") or "")
+                if (not vid or len(str(vid)) != 11) and url:
+                    m = REGEX_PUBLICADO_YT.search(url)
+                    if m:
+                        vid = m.group(1)
+                elif not vid or len(str(vid)) != 11:
+                    m = REGEX_PUBLICADO_YT.search(contenido)
+                    if m:
+                        vid = m.group(1)
+
                 if vid and isinstance(vid, str) and len(vid) == 11:
-                    es_short = bool(d.get("es_short") or d.get("short") or "short" in str(p).lower())
+                    if "/shorts/" in url or "/shorts/" in contenido:
+                        es_short = True
+                    elif "es_short" in d and isinstance(d["es_short"], bool):
+                        es_short = d["es_short"]
+                    else:
+                        dur = _obtener_duracion_render_proyecto(carpeta)
+                        es_short = (dur <= 180.0) if dur > 0 else False
                     return vid, es_short
         except Exception:
             pass
+
     return None, False
 
 
 def vincular_escenas_locales(con: sqlite3.Connection, dir_proyectos: Path = RAIZ / "proyectos") -> int:
     """Inspecciona proyectos locales y vincula su cronología con los videos en la base.
 
-    Solo empata por video_id guardado al subir (publicacion*.json o similar),
+    Solo empata por video_id guardado al subir (publicacion*.json, PUBLICADO.txt o similar),
     nunca por título parecido, y nunca un Short con un proyecto largo.
     """
     dir_proyectos = Path(dir_proyectos)
@@ -512,6 +669,8 @@ def vincular_escenas_locales(con: sqlite3.Connection, dir_proyectos: Path = RAIZ
         if not carpeta.is_dir():
             continue
         guion_path = carpeta / "guion" / "guion.json"
+        if not guion_path.exists():
+            guion_path = carpeta / "guion" / "guion_tiktok.json"
         if not guion_path.exists():
             continue
 
@@ -542,15 +701,15 @@ def vincular_escenas_locales(con: sqlite3.Connection, dir_proyectos: Path = RAIZ
             wav_candidatos = [
                 dir_voz / f"escena_{n_esc:03d}.wav",
                 dir_voz / f"escena_{n_esc}.wav",
+                dir_voz / f"escena_{n_esc:03d}.mp3",
+                dir_voz / f"escena_{n_esc}.mp3",
             ]
             for wc in wav_candidatos:
                 if wc.exists():
-                    try:
-                        with wave.open(str(wc), "rb") as wf:
-                            dur_esc = wf.getnframes() / float(wf.getframerate())
+                    d_wc = _obtener_duracion_archivo(wc)
+                    if d_wc > 0.1:
+                        dur_esc = d_wc
                         break
-                    except Exception:
-                        pass
 
             if dur_esc <= 0.0:
                 palabras = len((esc.get("voz") or "").split())
@@ -710,6 +869,12 @@ def recolectar_desde_youtube(
                 dur_s = iso_duracion_a_s(cnt.get("duration", ""))
 
                 csv_item = etiquetas_csv.get(vid, {})
+                if not csv_item:
+                    t_min = titulo.lower()
+                    for c_id, c_val in etiquetas_csv.items():
+                        if c_id.lower() in t_min or (len(c_id) >= 6 and c_id[:6].lower() in t_min):
+                            csv_item = c_val
+                            break
 
                 # Inferencia con reglas estrictas
                 meta = inferir_formato_y_metadatos(

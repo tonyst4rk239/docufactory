@@ -70,10 +70,16 @@ python src/metricas/autorizar_canal.py --canal novelas --token assets/credential
 4. **`largo_original`**: Todo video de formato horizontal mayor a 180 s que no sea una recopilación etiquetada.
 
 ### Temas y Categorización
-El tema se obtiene de la columna `tema` en `data/etiquetas_videos.csv`. Si viene vacía o no existe registro en el CSV, se clasifica mediante un diccionario de palabras clave en una de las siguientes categorías (nunca se usa el título bruto como tema):
+El tema se obtiene de la columna `tema` en `data/etiquetas_videos.csv` (usando el ID de 11 caracteres de YouTube). Si viene vacía o no existe registro en el CSV, se clasifica mediante un diccionario de palabras clave en una de las siguientes categorías (nunca se usa el título bruto como tema):
 - `muerte_mx` (`mictlan`, `muertos`, `ofrenda`, `cementerio`, `catrina`, `xolo`, `ánimas`).
-- `religión` (incluye `\bpapas?\b`, `biblia`, `vaticano`, `iglesia`).
-- `leyenda`, `paranormal`, `crimen`, `reality`, `historia`, `novela`.
+- `religión` (incluye `\bpapas?\b`, `arca de noé`, `biblia`, `vaticano`, `iglesia`).
+- `leyenda` (incluye `pascualita`, `nahual`, `llorona`, `mito`).
+- `reality` (incluye `ramón ayala`, `la granja vip`, `acapulco shore`, `pelea`).
+- `paranormal` (incluye `paranormales`, `fantasma`, `ovni`, `misterio`, `terror`).
+- `crimen` (incluye `diddy`, `homicidio`, `cárcel`, `delito`).
+- `tecnologia` (incluye `enjambres`, `inteligencia artificial`, `robot`, `ciberarmas`).
+- `viral` (incluye `real o ia`, `burro`, `trend`, `tiktok`).
+- `historia`, `novela`.
 
 ### Zona Horaria de Publicación (`America/Merida`)
 Los timestamps de estreno en UTC (`publishedAt`) se convierten a la zona horaria `America/Merida` (UTC-6) antes de registrar `fecha_publicacion` y `hora_publicacion`. De este modo, los reportes por día de la semana y hora reflejan el momento local real de la audiencia.
